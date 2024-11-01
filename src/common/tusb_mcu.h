@@ -653,6 +653,14 @@
   #define TUP_USBIP_DWC2_AT32
   #define TUP_DCD_ENDPOINT_MAX 8
 
+//--------------------------------------------------------------------+
+// ISP1581 via NRIO
+//--------------------------------------------------------------------+
+#elif TU_CHECK_MCU(OPT_MCU_NRIO)
+  #define TUP_DCD_ENDPOINT_MAX    8
+  #define TUP_RHPORT_HIGHSPEED    1
+  #define TU_ATTR_FAST_FUNC       __attribute__((section(".itcm.text"), long_call, target("arm")))
+
 #endif
 
 //--------------------------------------------------------------------+
