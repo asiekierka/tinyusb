@@ -25,6 +25,7 @@
  * This file is part of the TinyUSB stack.
  */
 
+#include "nds/dma.h"
 #include "tusb_option.h"
 
 #if CFG_TUD_ENABLED && CFG_TUSB_MCU == OPT_MCU_NRIO
@@ -36,14 +37,14 @@
  * Configuration.
  */
 
-// Use software IRQ disable. Seems to slightly improve USB performance,
-// but feels less clean.
-// #define USE_SOFTWARE_IRQ_DISABLE
+// #define NRIO_USE_SOFTWARE_IRQ_DISABLE
 
 // Use ASM transmit/receive helpers.
-#define USE_ASM_TXRX
+#define NRIO_USE_ASM_TXRX
 
-#define SUPPORT_LARGE_TRANSFERS
+#define NRIO_SUPPORT_LARGE_TRANSFERS
+
+// #define CFG_TUD_NRIO_DMA_CHANNEL 3
 
 /**
  * NRIO register defines.
@@ -193,11 +194,11 @@ DTCM_BSS
 static struct {
   uint8_t *buffer[TUP_DCD_ENDPOINT_MAX * 2];
   uint16_t buffer_length[TUP_DCD_ENDPOINT_MAX * 2];
-#ifdef SUPPORT_LARGE_TRANSFERS
+#ifdef NRIO_SUPPORT_LARGE_TRANSFERS
   uint16_t buffer_total[TUP_DCD_ENDPOINT_MAX * 2];
 #endif
   uint16_t xfer_mask;
-#ifdef USE_SOFTWARE_IRQ_DISABLE
+#ifdef NRIO_USE_SOFTWARE_IRQ_DISABLE
   bool irq_enabled;
 #endif
 } _dcd;
@@ -239,13 +240,13 @@ __attribute__((always_inline))
 static inline void dcd_nrio_tx_packet(uint32_t idx, uint32_t ep_addr, bool ack) {
   uint32_t total_bytes = _dcd.buffer_length[idx];
   uint32_t bytes_to_tx = total_bytes;
-#ifdef SUPPORT_LARGE_TRANSFERS
+#ifdef NRIO_SUPPORT_LARGE_TRANSFERS
   if (bytes_to_tx > 512)
     bytes_to_tx = 512;
 #endif
 
   if (ack) {
-#ifdef SUPPORT_LARGE_TRANSFERS
+#ifdef NRIO_SUPPORT_LARGE_TRANSFERS
     total_bytes -= bytes_to_tx;
     _dcd.buffer[idx] += bytes_to_tx;
     _dcd.buffer_length[idx] = total_bytes;
@@ -267,12 +268,19 @@ static inline void dcd_nrio_tx_packet(uint32_t idx, uint32_t ep_addr, bool ack) 
   NRIO_EP_IDX = idx;
   NRIO_EP_BUFLEN = bytes_to_tx;
 
-#ifdef USE_ASM_TXRX
+#ifdef CFG_TUD_NRIO_DMA_CHANNEL
+  while (DMA_CR(CFG_TUD_NRIO_DMA_CHANNEL) & DMA_BUSY);
+
+  //dmaSetParams(CFG_TUD_NRIO_DMA_CHANNEL, _dcd.buffer[idx], (void*) &NRIO_EP_DATA, DMA_COPY_HALFWORDS | DMA_SRC_INC | DMA_DST_FIX | ((bytes_to_tx + 1) >> 1));
+  dmaSetParams(CFG_TUD_NRIO_DMA_CHANNEL, _dcd.buffer[idx], (void*) &NRIO_EP_DATA, DMA_COPY_WORDS | DMA_SRC_INC | DMA_DST_FIX | ((bytes_to_tx + 3) >> 2));
+#else
+#ifdef NRIO_USE_ASM_TXRX
   dcd_nrio_tx_bytes(_dcd.buffer[idx], bytes_to_tx);
 #else
   uint32_t *buffer = (uint32_t*) _dcd.buffer[idx];
   for (int i = 0; i < (bytes_to_tx + 3) >> 2; i++)
     NRIO_EP_DATA32 = buffer[i];
+#endif
 #endif
 }
 
@@ -328,7 +336,7 @@ bool dcd_init(uint8_t rhport, const tusb_rhport_init_t* rh_init) {
     return false;
 
   irqSet(IRQ_CART, (VoidFn) dcd_int_handler);
-#ifdef USE_SOFTWARE_IRQ_DISABLE
+#ifdef NRIO_USE_SOFTWARE_IRQ_DISABLE
   _dcd.irq_enabled = false;
 #endif
   irqEnable(IRQ_CART);
@@ -364,7 +372,7 @@ bool dcd_deinit(uint8_t rhport) {
 void dcd_int_enable (uint8_t rhport) {
   (void) rhport;
 
-#ifdef USE_SOFTWARE_IRQ_DISABLE
+#ifdef NRIO_USE_SOFTWARE_IRQ_DISABLE
   _dcd.irq_enabled = true;
 #else
   if (_dcd.xfer_mask) {
@@ -382,7 +390,7 @@ void dcd_int_enable (uint8_t rhport) {
 void dcd_int_disable (uint8_t rhport) {
   (void) rhport;
 
-#ifdef USE_SOFTWARE_IRQ_DISABLE
+#ifdef NRIO_USE_SOFTWARE_IRQ_DISABLE
   _dcd.irq_enabled = false;
 #else
   NRIO_MODE &= ~NRIO_MODE_GLINTENA;
@@ -414,7 +422,7 @@ static bool dcd_xfer_handle (uint32_t nrio_addr, uint32_t ep_addr) {
       expected_length = received_bytes;
 
     // Copy data from NRIO to buffer
-#ifdef USE_ASM_TXRX
+#ifdef NRIO_USE_ASM_TXRX
     dcd_nrio_rx_bytes(_dcd.buffer[nrio_addr], expected_length);
 #else
     uint16_t *buf = (uint16_t*) _dcd.buffer[nrio_addr];    
@@ -425,7 +433,7 @@ static bool dcd_xfer_handle (uint32_t nrio_addr, uint32_t ep_addr) {
 #endif
 
     // Signal end of transfer
-#ifdef SUPPORT_LARGE_TRANSFERS
+#ifdef NRIO_SUPPORT_LARGE_TRANSFERS
     _dcd.buffer_length[nrio_addr] -= expected_length;
     if (received_bytes < 512 || !_dcd.buffer_length[nrio_addr])
       dcd_event_xfer_complete(0, ep_addr, _dcd.buffer_total[nrio_addr], XFER_RESULT_SUCCESS, true);
@@ -445,7 +453,7 @@ static bool dcd_xfer_handle (uint32_t nrio_addr, uint32_t ep_addr) {
 
 TU_ATTR_FAST_FUNC
 void dcd_int_handler (uint8_t rhport) {
-#ifdef USE_SOFTWARE_IRQ_DISABLE
+#ifdef NRIO_USE_SOFTWARE_IRQ_DISABLE
   if (!_dcd.irq_enabled)
     return;
 #endif
@@ -600,7 +608,7 @@ bool dcd_edpt_xfer (uint8_t rhport, uint8_t ep_addr, uint8_t * buffer, uint16_t 
   (void) total_bytes;
 
 #ifdef ARM9
-#ifndef SUPPORT_LARGE_TRANSFERS
+#ifndef NRIO_SUPPORT_LARGE_TRANSFERS
   sassert(total_bytes <= 512, "USBD Xfer too large: %d > 512", total_bytes);
 #endif
 #endif
@@ -618,13 +626,16 @@ bool dcd_edpt_xfer (uint8_t rhport, uint8_t ep_addr, uint8_t * buffer, uint16_t 
     int oldIME = enterCriticalSection();
     _dcd.buffer[idx] = (uint8_t*) buffer;
     _dcd.buffer_length[idx] = total_bytes;
-#ifdef SUPPORT_LARGE_TRANSFERS
+#ifdef NRIO_SUPPORT_LARGE_TRANSFERS
     _dcd.buffer_total[idx] = total_bytes;
 #endif
     leaveCriticalSection(oldIME);
     
     if (tu_edpt_dir(ep_addr) == TUSB_DIR_IN) {
       // Device to Host - queue data on FIFO, wait for TX interrupt
+#ifdef CFG_TUD_NRIO_DMA_CHANNEL
+      DC_FlushRange(buffer, total_bytes);
+#endif
       dcd_nrio_tx_packet(idx, ep_addr, false);
     } else {
       // Host to Device - poll BUFLEN, then write to buffer
