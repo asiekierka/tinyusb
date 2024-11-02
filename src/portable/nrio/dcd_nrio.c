@@ -112,6 +112,7 @@
 #define NRIO_EP_CFG    NRIO_REG(0x28)
 
 #define NRIO_EP_DATA   NRIO_REG(0x20)
+#define NRIO_EP_DATA32 (*((vu32*) &NRIO_REG(0x20)))
 #define NRIO_EP_BUFLEN NRIO_REG(0x1C)
 
 #define NRIO_EP_PKT_FIFO_LEN(n) (n)
@@ -329,11 +330,17 @@ static bool dcd_xfer_handle (uint32_t nrio_addr, uint32_t ep_addr, bool in_isr) 
       expected_length = received_bytes;
 
     // Copy data from NRIO to buffer
-    uint16_t *buf = _dcd.rx_buffer[num];    
-    for (int i = 0; i < expected_length >> 1; i++)
-      buf[i] = NRIO_EP_DATA;
-    if (expected_length & 1)
-      ((uint8_t*) buf)[expected_length - 1] = NRIO_EP_DATA;
+    if (!(expected_length & 3)) {
+      uint32_t *buf = (uint32_t*) _dcd.rx_buffer[num];
+      for (int i = 0; i < expected_length >> 2; i++)
+        buf[i] = NRIO_EP_DATA32;
+    } else {
+      uint16_t *buf = (uint16_t*) _dcd.rx_buffer[num];    
+      for (int i = 0; i < expected_length >> 1; i++)
+        buf[i] = NRIO_EP_DATA;
+      if (expected_length & 1)
+        ((uint8_t*) buf)[expected_length - 1] = NRIO_EP_DATA;
+    }
   }
 
   // Signal end of transfer
@@ -510,7 +517,7 @@ bool dcd_edpt_xfer (uint8_t rhport, uint8_t ep_addr, uint8_t * buffer, uint16_t 
   if (_dcd.buffer_length[idx] != BUFFER_LENGTH_NONE)
     return false;
 
-  uint16_t *buffer16 = (uint16_t*) buffer;
+  uint32_t *buffer32 = (uint32_t*) buffer;
   if (!total_bytes) {
     // Handle zero-length packets
     NRIO_EP_CFG = NRIO_EP_CFG_STATUS;
@@ -521,14 +528,14 @@ bool dcd_edpt_xfer (uint8_t rhport, uint8_t ep_addr, uint8_t * buffer, uint16_t 
     NRIO_EP_IDX = idx;
     NRIO_EP_BUFLEN = total_bytes;
 
-    for (int i = 0; i < (total_bytes + 1) >> 1; i++)
-      NRIO_EP_DATA = buffer16[i];
+    for (int i = 0; i < (total_bytes + 3) >> 2; i++)
+      NRIO_EP_DATA32 = buffer32[i];
 
     _dcd.buffer_length[idx] = total_bytes;
   } else {
     // Host to Device - poll BUFLEN, then write to buffer
     int oldIME = enterCriticalSection();
-    _dcd.rx_buffer[num] = buffer16;
+    _dcd.rx_buffer[num] = (uint16_t*) buffer32;
     _dcd.xfer_mask |= (1 << idx);
     _dcd.buffer_length[idx] = total_bytes;
     leaveCriticalSection(oldIME);
