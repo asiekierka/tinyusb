@@ -176,6 +176,7 @@
 #define NRIQ_INTH_DEFAULT NRIO_INTH_ALL
 
 // Device driver state.
+DTCM_BSS
 static struct {
   uint16_t *rx_buffer[TUP_DCD_ENDPOINT_MAX];
   uint16_t buffer_length[TUP_DCD_ENDPOINT_MAX * 2];
@@ -207,6 +208,14 @@ static const tusb_desc_endpoint_t ep0IN_desc =
   .wMaxPacketSize   = CFG_TUD_ENDPOINT0_SIZE,
   .bInterval        = 0
 };
+
+TU_ATTR_FAST_FUNC
+void dcd_int_handler (uint8_t rhport);
+
+// Use software IRQ disable. Seems to slightly improve USB performance,
+// but feels less clean.
+// #define USE_SOFTWARE_IRQ_DISABLE
+
 /*------------------------------------------------------------------*/
 /* Device API
  *------------------------------------------------------------------*/
@@ -222,7 +231,9 @@ static void dcd_bus_init (void) {
   leaveCriticalSection(oldIME);
 
   // Configure interrupts
-  NRIO_INT_CFG = NRIO_INT_CFG_CDBGMOD(1) | NRIO_INT_CFG_DDBGMODIN(1) | NRIO_INT_CFG_DDBGMODOUT(1);
+  NRIO_INT_CFG = NRIO_INT_CFG_CDBGMOD(1) | NRIO_INT_CFG_DDBGMODIN(1) | NRIO_INT_CFG_DDBGMODOUT(1)
+    | NRIO_INT_CFG_SIG_LEVEL | NRIO_INT_CFG_POL_HIGH;
+
   NRIO_INT_ENL = NRIQ_INTL_DEFAULT;
   NRIO_INT_ENH = NRIQ_INTH_DEFAULT;
 
@@ -246,8 +257,6 @@ static void nrio_reset (void) {
 
 // Initialize controller to device mode
 bool dcd_init(uint8_t rhport, const tusb_rhport_init_t* rh_init) {
-  _dcd.irq_enabled = false;
-
   // Configure GBA cartridge bus
 #ifdef ARM9
   sysSetCartOwner(BUS_OWNER_ARM9);
@@ -256,8 +265,13 @@ bool dcd_init(uint8_t rhport, const tusb_rhport_init_t* rh_init) {
 #endif
   REG_EXMEMCNT = (REG_EXMEMCNT & ~0x1F) | EXMEMCNT_ROM_TIME1_6_CYCLES
     | EXMEMCNT_ROM_TIME2_4_CYCLES | EXMEMCNT_SRAM_TIME_6_CYCLES;
+  irqSet(IRQ_CART, (VoidFn) dcd_int_handler);
+#ifdef USE_SOFTWARE_IRQ_DISABLE
+  _dcd.irq_enabled = false;
+  irqEnable(IRQ_CART);
+#endif
 
-  nrio_reset(); 
+  nrio_reset();
   dcd_bus_init();
   dcd_connect(rhport);
   return true;
@@ -266,13 +280,26 @@ bool dcd_init(uint8_t rhport, const tusb_rhport_init_t* rh_init) {
 // Enable device interrupt
 void dcd_int_enable (uint8_t rhport) {
   (void) rhport;
+
+#ifdef USE_SOFTWARE_IRQ_DISABLE
   _dcd.irq_enabled = true;
+#else
+  int oldIME = enterCriticalSection();
+  irqEnable(IRQ_CART);
+  dcd_int_handler(0);
+  leaveCriticalSection(oldIME);
+#endif
 }
 
 // Disable device interrupt
 void dcd_int_disable (uint8_t rhport) {
   (void) rhport;
+
+#ifdef USE_SOFTWARE_IRQ_DISABLE
   _dcd.irq_enabled = false;
+#else
+  irqDisable(IRQ_CART);
+#endif
 }
 
 /**
@@ -317,15 +344,16 @@ static bool dcd_xfer_handle (uint32_t nrio_addr, uint32_t ep_addr, bool in_isr) 
 
 TU_ATTR_FAST_FUNC
 void dcd_int_handler (uint8_t rhport) {
+#ifdef USE_SOFTWARE_IRQ_DISABLE
   if (!_dcd.irq_enabled)
     return;
+#endif
 
   // EPxTX/EPxRX interrupt flags.
   uint32_t xfers = 0;
   TU_ATTR_ALIGNED(4) uint16_t _setup_packet[4];
 
   uint16_t mask;
-
   mask = NRIO_INT_STL;
   NRIO_INT_STL = mask;
   if (mask) {
