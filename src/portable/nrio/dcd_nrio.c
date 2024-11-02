@@ -33,6 +33,19 @@
 #include "device/dcd.h"
 
 /**
+ * Configuration.
+ */
+
+// Use software IRQ disable. Seems to slightly improve USB performance,
+// but feels less clean.
+// #define USE_SOFTWARE_IRQ_DISABLE
+
+// Use ASM transmit/receive helpers.
+#define USE_ASM_TXRX
+
+#define SUPPORT_LARGE_TRANSFERS
+
+/**
  * NRIO register defines.
  *
  * The NRIO (DS-Writer etc.) is an ISP1581-compatible chip exposed via the
@@ -179,13 +192,16 @@
 // Device driver state.
 DTCM_BSS
 static struct {
-  uint16_t *rx_buffer[TUP_DCD_ENDPOINT_MAX];
+  uint8_t *buffer[TUP_DCD_ENDPOINT_MAX * 2];
   uint16_t buffer_length[TUP_DCD_ENDPOINT_MAX * 2];
-  bool irq_enabled;
+#ifdef SUPPORT_LARGE_TRANSFERS
+  uint16_t buffer_total[TUP_DCD_ENDPOINT_MAX * 2];
+#endif
   uint16_t xfer_mask;
+#ifdef USE_SOFTWARE_IRQ_DISABLE
+  bool irq_enabled;
+#endif
 } _dcd;
-
-#define BUFFER_LENGTH_NONE 0xFFFF
 
 // Two endpoint 0 descriptor definition for unified dcd_edpt_open()
 static const tusb_desc_endpoint_t ep0OUT_desc =
@@ -213,12 +229,6 @@ static const tusb_desc_endpoint_t ep0IN_desc =
 TU_ATTR_FAST_FUNC
 void dcd_int_handler (uint8_t rhport);
 
-// Use software IRQ disable. Seems to slightly improve USB performance,
-// but feels less clean.
-// #define USE_SOFTWARE_IRQ_DISABLE
-
-#define USE_ASM_TXRX
-
 /*------------------------------------------------------------------*/
 /* Device API
  *------------------------------------------------------------------*/
@@ -226,13 +236,54 @@ void dcd_int_handler (uint8_t rhport);
 extern void dcd_nrio_tx_bytes(const void *buffer, uint32_t len);
 extern void dcd_nrio_rx_bytes(void *buffer, uint32_t len);
 
+__attribute__((always_inline))
+static inline void dcd_nrio_tx_packet(uint32_t idx, uint32_t ep_addr, bool ack) {
+  uint32_t total_bytes = _dcd.buffer_length[idx];
+  uint32_t bytes_to_tx = total_bytes;
+#ifdef SUPPORT_LARGE_TRANSFERS
+  if (bytes_to_tx > 512)
+    bytes_to_tx = 512;
+#endif
+
+  if (ack) {
+#ifdef SUPPORT_LARGE_TRANSFERS
+    total_bytes -= bytes_to_tx;
+    _dcd.buffer[idx] += bytes_to_tx;
+    _dcd.buffer_length[idx] = total_bytes;
+
+    bytes_to_tx = total_bytes;
+    if (!bytes_to_tx) {
+      dcd_event_xfer_complete(0, ep_addr, _dcd.buffer_total[idx], XFER_RESULT_SUCCESS, true);
+      return;
+    }
+    if (bytes_to_tx > 512)
+      bytes_to_tx = 512;
+#else
+    dcd_event_xfer_complete(0, ep_addr, _dcd.buffer_length[idx], XFER_RESULT_SUCCESS, true);
+    _dcd.buffer_length[idx] = 0;
+    return;
+#endif
+  }
+
+  NRIO_EP_IDX = idx;
+  NRIO_EP_BUFLEN = bytes_to_tx;
+
+#ifdef USE_ASM_TXRX
+  dcd_nrio_tx_bytes(_dcd.buffer[idx], bytes_to_tx);
+#else
+  uint32_t *buffer = (uint32_t*) _dcd.buffer[idx];
+  for (int i = 0; i < (bytes_to_tx + 3) >> 2; i++)
+    NRIO_EP_DATA32 = buffer[i];
+#endif
+}
+
 /**
  * @brief Post-bus reset initialization.
  */
 static void dcd_bus_init (void) {
   // Reinitialize _dcd.
   int oldIME = enterCriticalSection();
-  memset(_dcd.buffer_length, 0xFF, sizeof(_dcd.buffer_length));
+  memset(_dcd.buffer_length, 0, sizeof(_dcd.buffer_length));
   _dcd.xfer_mask = 0;
   leaveCriticalSection(oldIME);
 
@@ -321,17 +372,15 @@ void dcd_int_disable (uint8_t rhport) {
  * @return bool Whether or not the event was processed.
  */
 TU_ATTR_FAST_FUNC
-static bool dcd_xfer_handle (uint32_t nrio_addr, uint32_t ep_addr, bool in_isr) {
+static bool dcd_xfer_handle (uint32_t nrio_addr, uint32_t ep_addr) {
   uint16_t expected_length = _dcd.buffer_length[nrio_addr];
 
-  if (expected_length == BUFFER_LENGTH_NONE)
+  if (!expected_length)
     return false;
-
-  NRIO_EP_IDX = nrio_addr;
-  int num = tu_edpt_number(ep_addr);
 
   if (tu_edpt_dir(ep_addr) == TUSB_DIR_OUT) {
     // Handle Host->Device transfers
+    NRIO_EP_IDX = nrio_addr;
     uint16_t received_bytes = NRIO_EP_BUFLEN;
     if (!received_bytes)
       return false;
@@ -340,19 +389,31 @@ static bool dcd_xfer_handle (uint32_t nrio_addr, uint32_t ep_addr, bool in_isr) 
 
     // Copy data from NRIO to buffer
 #ifdef USE_ASM_TXRX
-    dcd_nrio_rx_bytes(_dcd.rx_buffer[num], expected_length);
+    dcd_nrio_rx_bytes(_dcd.buffer[nrio_addr], expected_length);
 #else
-    uint16_t *buf = (uint16_t*) _dcd.rx_buffer[num];    
+    uint16_t *buf = (uint16_t*) _dcd.buffer[nrio_addr];    
     for (int i = 0; i < expected_length >> 1; i++)
       buf[i] = NRIO_EP_DATA;
     if (expected_length & 1)
       ((uint8_t*) buf)[expected_length - 1] = NRIO_EP_DATA;
 #endif
+
+    // Signal end of transfer
+#ifdef SUPPORT_LARGE_TRANSFERS
+    _dcd.buffer_length[nrio_addr] -= expected_length;
+    if (received_bytes < 512 || !_dcd.buffer_length[nrio_addr])
+      dcd_event_xfer_complete(0, ep_addr, _dcd.buffer_total[nrio_addr], XFER_RESULT_SUCCESS, true);
+    else
+      _dcd.buffer[nrio_addr] += expected_length;
+#else
+    dcd_event_xfer_complete(0, ep_addr, expected_length, XFER_RESULT_SUCCESS, true);
+    _dcd.buffer_length[nrio_addr] = 0;
+#endif
+  } else {
+    // Handle Device->Host transfers
+    dcd_nrio_tx_packet(nrio_addr, ep_addr, true);
   }
 
-  // Signal end of transfer
-  _dcd.buffer_length[nrio_addr] = BUFFER_LENGTH_NONE;
-  dcd_event_xfer_complete(0, ep_addr, expected_length, XFER_RESULT_SUCCESS, in_isr);
   return true;
 }
 
@@ -412,7 +473,7 @@ void dcd_int_handler (uint8_t rhport) {
   // Handle TX/RX interrupts.
   while (xfers) {
     uint32_t index = __builtin_clz(xfers) ^ 0x1F;
-    if (dcd_xfer_handle(index, tu_edpt_from_nrio_idx(index), true)) {
+    if (dcd_xfer_handle(index, tu_edpt_from_nrio_idx(index))) {
       _dcd.xfer_mask &= ~(1 << index);
     } else {
       _dcd.xfer_mask |= (1 << index);
@@ -486,7 +547,7 @@ bool dcd_edpt_open (uint8_t rhport, tusb_desc_endpoint_t const * ep_desc) {
   NRIO_EP_IDX = idx;
   // Enable double-buffering for Host->Device transfers.
   NRIO_EP_TYPE = ep_desc->bmAttributes.xfer | NRIO_EP_TYPE_NOEMPKT
-    | (tu_edpt_dir(ep_desc->bEndpointAddress) == TUSB_DIR_OUT ? NRIO_EP_TYPE_DBLBUF : 0);
+    | (tu_edpt_dir(ep_desc->bEndpointAddress) == TUSB_DIR_OUT ? NRIO_EP_TYPE_DBLBUF : NRIO_EP_TYPE_DBLBUF);
   NRIO_EP_PKT = ep_desc->wMaxPacketSize;
   NRIO_EP_CFG = NRIO_EP_CFG_CLBUF;
   NRIO_EP_IDX = idx;
@@ -513,41 +574,37 @@ bool dcd_edpt_xfer (uint8_t rhport, uint8_t ep_addr, uint8_t * buffer, uint16_t 
   (void) total_bytes;
 
 #ifdef ARM9
+#ifndef SUPPORT_LARGE_TRANSFERS
   sassert(total_bytes <= 512, "USBD Xfer too large: %d > 512", total_bytes);
+#endif
 #endif
 
   uint32_t idx = tu_edpt_nrio_idx(ep_addr);
-  uint32_t num = tu_edpt_number(ep_addr);
 
-  if (_dcd.buffer_length[idx] != BUFFER_LENGTH_NONE)
+  if (_dcd.buffer_length[idx])
     return false;
 
-  uint32_t *buffer32 = (uint32_t*) buffer;
   if (!total_bytes) {
     // Handle zero-length packets
     NRIO_EP_CFG = NRIO_EP_CFG_STATUS;
-    while (NRIO_EP_CFG & NRIO_EP_CFG_STATUS)
-      dcd_event_xfer_complete(0, ep_addr, 0, XFER_RESULT_SUCCESS, false);
-  } else if (tu_edpt_dir(ep_addr) == TUSB_DIR_IN) {
-    // Device to Host - queue data on FIFO, wait for TX interrupt
-    NRIO_EP_IDX = idx;
-    NRIO_EP_BUFLEN = total_bytes;
-
-#ifdef USE_ASM_TXRX
-    dcd_nrio_tx_bytes(buffer32, total_bytes);
-#else
-    for (int i = 0; i < (total_bytes + 3) >> 2; i++)
-      NRIO_EP_DATA32 = buffer32[i];
-#endif
-
-    _dcd.buffer_length[idx] = total_bytes;
+    dcd_event_xfer_complete(0, ep_addr, 0, XFER_RESULT_SUCCESS, false);
   } else {
-    // Host to Device - poll BUFLEN, then write to buffer
     int oldIME = enterCriticalSection();
-    _dcd.rx_buffer[num] = (uint16_t*) buffer32;
-    // _dcd.xfer_mask |= (1 << idx);
+    _dcd.buffer[idx] = (uint8_t*) buffer;
     _dcd.buffer_length[idx] = total_bytes;
+#ifdef SUPPORT_LARGE_TRANSFERS
+    _dcd.buffer_total[idx] = total_bytes;
+#endif
     leaveCriticalSection(oldIME);
+    
+    if (tu_edpt_dir(ep_addr) == TUSB_DIR_IN) {
+      // Device to Host - queue data on FIFO, wait for TX interrupt
+      dcd_nrio_tx_packet(idx, ep_addr, false);
+    } else {
+      // Host to Device - poll BUFLEN, then write to buffer
+      // RX already configured above
+      // _dcd.xfer_mask |= (1 << idx);
+    }
   }
 
   return true;
