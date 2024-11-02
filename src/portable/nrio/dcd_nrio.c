@@ -217,9 +217,14 @@ void dcd_int_handler (uint8_t rhport);
 // but feels less clean.
 // #define USE_SOFTWARE_IRQ_DISABLE
 
+#define USE_ASM_TXRX
+
 /*------------------------------------------------------------------*/
 /* Device API
  *------------------------------------------------------------------*/
+
+extern void dcd_nrio_tx_bytes(const void *buffer, uint32_t len);
+extern void dcd_nrio_rx_bytes(void *buffer, uint32_t len);
 
 /**
  * @brief Post-bus reset initialization.
@@ -330,17 +335,15 @@ static bool dcd_xfer_handle (uint32_t nrio_addr, uint32_t ep_addr, bool in_isr) 
       expected_length = received_bytes;
 
     // Copy data from NRIO to buffer
-    if (!(expected_length & 3)) {
-      uint32_t *buf = (uint32_t*) _dcd.rx_buffer[num];
-      for (int i = 0; i < expected_length >> 2; i++)
-        buf[i] = NRIO_EP_DATA32;
-    } else {
-      uint16_t *buf = (uint16_t*) _dcd.rx_buffer[num];    
-      for (int i = 0; i < expected_length >> 1; i++)
-        buf[i] = NRIO_EP_DATA;
-      if (expected_length & 1)
-        ((uint8_t*) buf)[expected_length - 1] = NRIO_EP_DATA;
-    }
+#ifdef USE_ASM_TXRX
+    dcd_nrio_rx_bytes(_dcd.rx_buffer[num], expected_length);
+#else
+    uint16_t *buf = (uint16_t*) _dcd.rx_buffer[num];    
+    for (int i = 0; i < expected_length >> 1; i++)
+      buf[i] = NRIO_EP_DATA;
+    if (expected_length & 1)
+      ((uint8_t*) buf)[expected_length - 1] = NRIO_EP_DATA;
+#endif
   }
 
   // Signal end of transfer
@@ -358,7 +361,7 @@ void dcd_int_handler (uint8_t rhport) {
 
   // EPxTX/EPxRX interrupt flags.
   uint32_t xfers = 0;
-  TU_ATTR_ALIGNED(4) uint16_t _setup_packet[4];
+  uint32_t _setup_packet[2];
 
   uint16_t mask;
   mask = NRIO_INT_STL;
@@ -387,10 +390,8 @@ void dcd_int_handler (uint8_t rhport) {
       }
       if (mask & NRIO_INTL_EP0SETUP) {
         NRIO_EP_IDX = NRIO_EP_IDX_EP0_SETUP;
-        _setup_packet[0] = NRIO_EP_DATA;
-        _setup_packet[1] = NRIO_EP_DATA;
-        _setup_packet[2] = NRIO_EP_DATA;
-        _setup_packet[3] = NRIO_EP_DATA;
+        _setup_packet[0] = NRIO_EP_DATA32;
+        _setup_packet[1] = NRIO_EP_DATA32;
         dcd_event_setup_received(0, (uint8_t*) _setup_packet, true);
       }
     }
@@ -528,8 +529,12 @@ bool dcd_edpt_xfer (uint8_t rhport, uint8_t ep_addr, uint8_t * buffer, uint16_t 
     NRIO_EP_IDX = idx;
     NRIO_EP_BUFLEN = total_bytes;
 
+#ifdef USE_ASM_TXRX
+    dcd_nrio_tx_bytes(buffer32, total_bytes);
+#else
     for (int i = 0; i < (total_bytes + 3) >> 2; i++)
       NRIO_EP_DATA32 = buffer32[i];
+#endif
 
     _dcd.buffer_length[idx] = total_bytes;
   } else {
