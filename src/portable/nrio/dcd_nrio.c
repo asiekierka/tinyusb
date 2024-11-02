@@ -152,9 +152,8 @@
 #define NRIO_EP_SHORT_OUT7   NRIO_EP_SHORT_OUT(7)
 #define NRIO_EP_SHORT  NRIO_REG(0x24)
 
-#define NRIO_CHIP_ID_ISP1581 0x1581
-#define NRIO_CHIP_ID   NRIO_REG(0x70)
-#define NRIO_CHIP_REV  NRIO_REG(0x72)
+#define NRIO_CHIP_IDL  NRIO_REG(0x70)
+#define NRIO_CHIP_IDH  NRIO_REG(0x72)
 
 #define NRIO_FRN_MICROSOF(n) ((n) << 11)
 #define NRIO_FRN_SOF(n)      (n)
@@ -322,6 +321,12 @@ bool dcd_init(uint8_t rhport, const tusb_rhport_init_t* rh_init) {
 #endif
   REG_EXMEMCNT = (REG_EXMEMCNT & ~0x1F) | EXMEMCNT_ROM_TIME1_6_CYCLES
     | EXMEMCNT_ROM_TIME2_4_CYCLES | EXMEMCNT_SRAM_TIME_6_CYCLES;
+
+  // Check if the chip is an ISP1581/82/83
+  uint32_t chip_id = ((NRIO_CHIP_IDH << 16) | NRIO_CHIP_IDL) & 0xFFFFFF;
+  if (!(chip_id >= 0x158100 && chip_id < 0x158400))
+    return false;
+
   irqSet(IRQ_CART, (VoidFn) dcd_int_handler);
 #ifdef USE_SOFTWARE_IRQ_DISABLE
   _dcd.irq_enabled = false;
@@ -331,6 +336,27 @@ bool dcd_init(uint8_t rhport, const tusb_rhport_init_t* rh_init) {
   nrio_reset();
   dcd_bus_init();
   dcd_connect(rhport);
+  return true;
+}
+
+bool dcd_deinit(uint8_t rhport) {
+  // Check if the chip is an ISP1581/82/83
+  uint32_t chip_id = ((NRIO_CHIP_IDH << 16) | NRIO_CHIP_IDL) & 0xFFFFFF;
+  if (!(chip_id >= 0x158100 && chip_id < 0x158400))
+    return true;
+
+  // Reset USB controller
+  NRIO_MODE = NRIO_MODE_SFRESET;
+  swiDelay(8378); // 1ms
+  NRIO_MODE = 0;
+  swiDelay(8378); // 1ms
+
+  // Suspend USB controller
+  NRIO_MODE = NRIO_MODE_GOSUSP;
+  swiDelay(8378); // 1ms
+  NRIO_MODE = 0;
+  swiDelay(8378); // 1ms
+
   return true;
 }
 
