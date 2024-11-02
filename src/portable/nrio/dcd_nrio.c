@@ -274,8 +274,8 @@ bool dcd_init(uint8_t rhport, const tusb_rhport_init_t* rh_init) {
   irqSet(IRQ_CART, (VoidFn) dcd_int_handler);
 #ifdef USE_SOFTWARE_IRQ_DISABLE
   _dcd.irq_enabled = false;
-  irqEnable(IRQ_CART);
 #endif
+  irqEnable(IRQ_CART);
 
   nrio_reset();
   dcd_bus_init();
@@ -290,10 +290,14 @@ void dcd_int_enable (uint8_t rhport) {
 #ifdef USE_SOFTWARE_IRQ_DISABLE
   _dcd.irq_enabled = true;
 #else
-  int oldIME = enterCriticalSection();
-  irqEnable(IRQ_CART);
-  dcd_int_handler(0);
-  leaveCriticalSection(oldIME);
+  if (_dcd.xfer_mask) {
+    int oldIME = enterCriticalSection();
+    NRIO_MODE |= NRIO_MODE_GLINTENA;
+    dcd_int_handler(0);
+    leaveCriticalSection(oldIME);
+  } else {
+    NRIO_MODE |= NRIO_MODE_GLINTENA;
+  }
 #endif
 }
 
@@ -304,7 +308,7 @@ void dcd_int_disable (uint8_t rhport) {
 #ifdef USE_SOFTWARE_IRQ_DISABLE
   _dcd.irq_enabled = false;
 #else
-  irqDisable(IRQ_CART);
+  NRIO_MODE &= ~NRIO_MODE_GLINTENA;
 #endif
 }
 
@@ -541,7 +545,7 @@ bool dcd_edpt_xfer (uint8_t rhport, uint8_t ep_addr, uint8_t * buffer, uint16_t 
     // Host to Device - poll BUFLEN, then write to buffer
     int oldIME = enterCriticalSection();
     _dcd.rx_buffer[num] = (uint16_t*) buffer32;
-    _dcd.xfer_mask |= (1 << idx);
+    // _dcd.xfer_mask |= (1 << idx);
     _dcd.buffer_length[idx] = total_bytes;
     leaveCriticalSection(oldIME);
   }
