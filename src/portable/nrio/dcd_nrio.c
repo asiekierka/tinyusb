@@ -711,8 +711,9 @@ bool dcd_edpt_open (uint8_t rhport, tusb_desc_endpoint_t const * ep_desc) {
   if (_dcd.type == NRIO_TYPE_D14) {
     NRIO_D14_EP_IDX = idx;
     // Enable double-buffering for Host->Device transfers.
+    // TODO: Enable double-buffering for Device->Host transfers?
     NRIO_D14_EP_TYPE = ep_desc->bmAttributes.xfer | NRIO_D14_EP_TYPE_NOEMPKT
-      | (tu_edpt_dir(ep_desc->bEndpointAddress) == TUSB_DIR_OUT ? NRIO_D14_EP_TYPE_DBLBUF : NRIO_D14_EP_TYPE_DBLBUF);
+      | (tu_edpt_dir(ep_desc->bEndpointAddress) == TUSB_DIR_OUT ? NRIO_D14_EP_TYPE_DBLBUF : 0);
     NRIO_D14_EP_PKT = ep_desc->wMaxPacketSize;
     NRIO_D14_EP_CFG = NRIO_D14_EP_CFG_CLBUF;
     NRIO_D14_EP_IDX = idx;
