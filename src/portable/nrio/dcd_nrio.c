@@ -25,6 +25,7 @@
  * This file is part of the TinyUSB stack.
  */
 
+#include "nds/ndstypes.h"
 #include "tusb_option.h"
 
 #if CFG_TUD_ENABLED && CFG_TUSB_MCU == OPT_MCU_NRIO
@@ -36,7 +37,6 @@
  * Configuration.
  */
 
-// #define NRIO_USE_SOFTWARE_IRQ_DISABLE
 // #define CFG_TUD_NRIO_DMA_CHANNEL 3
 
 /**
@@ -72,7 +72,8 @@
 
 #define NRIO_D12_MODE_CLK_DEFAULT (NRIO_D12_MODE_CLK_INITIAL | NRIO_D12_MODE_CLK_DIV(8))
 
-#define DCD_BUFFER_NONE 0xFFFFFFFF
+#define DCD_BUFFER_LAST_TX 0xFFFFFFFD
+#define DCD_BUFFER_NONE    0xFFFFFFFF
 
 // Device driver state.
 static struct {
@@ -87,9 +88,6 @@ static struct {
   uint16_t pending_xfers;
   uint8_t type; // Controller type
   uint8_t d12_mode; // D12 mode register
-#ifdef NRIO_USE_SOFTWARE_IRQ_DISABLE
-  bool irq_enabled;
-#endif
 } _dcd;
 
 // Two endpoint 0 descriptor definition for unified dcd_edpt_open()
@@ -116,7 +114,9 @@ static const tusb_desc_endpoint_t ep0IN_desc =
 };
 
 TU_ATTR_FAST_FUNC
-void dcd_int_handler (uint8_t rhport);
+void dcd_d14_int_handler (void);
+TU_ATTR_FAST_FUNC
+void dcd_d12_int_handler (void);
 
 /*------------------------------------------------------------------*/
 /* Device API
@@ -161,13 +161,13 @@ static inline void nrio_d12_set_mode(uint8_t val) {
   }
 }
 
-static void nrio_d14_tx_packet(uint32_t idx, uint32_t ep_addr, bool ack) {
+static void nrio_d14_tx_packet(uint32_t idx, uint32_t ep_addr, bool after_tx) {
   uint32_t total_bytes = _dcd.buffer_length[idx];
   uint32_t bytes_to_tx = total_bytes;
   if (bytes_to_tx > NRIO_D14_MAX_PACKET_SIZE)
     bytes_to_tx = NRIO_D14_MAX_PACKET_SIZE;
 
-  if (ack) {
+  if (after_tx) {
     total_bytes -= bytes_to_tx;
     _dcd.buffer[idx] += bytes_to_tx;
     _dcd.buffer_length[idx] = total_bytes;
@@ -197,31 +197,53 @@ static void nrio_d14_tx_packet(uint32_t idx, uint32_t ep_addr, bool ack) {
 
 __attribute__((noinline))
 TU_ATTR_FAST_FUNC
-static uint32_t nrio_d12_tx_packet(uint32_t idx, uint32_t ep_addr, bool ack) {
+static void nrio_d12_tx_packet(uint32_t idx, uint32_t ep_addr, bool after_tx) {
   uint32_t total_bytes = _dcd.buffer_length[idx];
+
+  if (after_tx) {
+    if (!total_bytes) {
+      // Handle double buffering
+      if (idx < 4 || (uintptr_t) _dcd.buffer[idx] == DCD_BUFFER_LAST_TX) {
+        _dcd.buffer[idx] = (void*) DCD_BUFFER_NONE;
+        dcd_event_xfer_complete(0, ep_addr, _dcd.buffer_total[idx], XFER_RESULT_SUCCESS, true);
+      } else {
+        _dcd.buffer[idx] = (void*) DCD_BUFFER_LAST_TX;
+      }
+
+      return;
+    }
+  }
+
+  int oldIME = enterCriticalSection();
+
+d12_tx_packet:
   uint32_t bytes_to_tx = total_bytes;
   if (bytes_to_tx > NRIO_D12_MAX_PACKET_SIZE(idx))
     bytes_to_tx = NRIO_D12_MAX_PACKET_SIZE(idx);
 
-  if (ack) {
-    total_bytes -= bytes_to_tx;
-    _dcd.buffer[idx] += bytes_to_tx;
-    _dcd.buffer_length[idx] = total_bytes;
-
-    bytes_to_tx = total_bytes;
-    if (!bytes_to_tx) {
-      _dcd.buffer[idx] = (void*) DCD_BUFFER_NONE;
-      dcd_event_xfer_complete(0, ep_addr, _dcd.buffer_total[idx], XFER_RESULT_SUCCESS, true);
-      return bytes_to_tx;
-    }
-    if (bytes_to_tx > NRIO_D12_MAX_PACKET_SIZE(idx))
-      bytes_to_tx = NRIO_D12_MAX_PACKET_SIZE(idx);
-  }
-
   nrio_d12_select_endpoint(idx);
   nrio_d12_tx_bytes(_dcd.buffer[idx], bytes_to_tx);
   nrio_d12_validate_buffer();
-  return bytes_to_tx;
+
+  total_bytes -= bytes_to_tx;
+  _dcd.buffer[idx] += bytes_to_tx;
+  _dcd.buffer_length[idx] = total_bytes;
+
+  // Handle double buffering
+  if (idx >= 4) {
+    if (!after_tx) {
+      if (total_bytes) {
+        // Queue second packet
+        after_tx = true;
+        goto d12_tx_packet;
+      } else {
+        // Mark transaction as last in queue
+        _dcd.buffer[idx] = (void*) DCD_BUFFER_LAST_TX;
+      }
+    }
+  }
+
+  leaveCriticalSection(oldIME);
 }
 
 static void dcd_clear_after_bus_reset (void) {
@@ -305,11 +327,8 @@ bool dcd_init(uint8_t rhport, const tusb_rhport_init_t* rh_init) {
       return false;
     }
   }
-  
-#ifdef NRIO_USE_SOFTWARE_IRQ_DISABLE
-  _dcd.irq_enabled = false;
-#endif
-  irqSet(IRQ_CART, (VoidFn) dcd_int_handler);
+
+  irqSet(IRQ_CART, (VoidFn) (_dcd.type == NRIO_TYPE_D14 ? dcd_d14_int_handler : dcd_d12_int_handler));
   irqEnable(IRQ_CART);
 
   if (_dcd.type == NRIO_TYPE_D14) {
@@ -331,6 +350,8 @@ bool dcd_deinit(uint8_t rhport) {
   // Check if the chip is an ISP1581/82/83
   if (_dcd.type == 0)
     return true;
+
+  irqDisable(IRQ_CART);
 
   if (_dcd.type == NRIO_TYPE_D14) {
     // Reset USB controller
@@ -357,14 +378,11 @@ bool dcd_deinit(uint8_t rhport) {
 void dcd_int_enable (uint8_t rhport) {
   (void) rhport;
 
-#ifdef NRIO_USE_SOFTWARE_IRQ_DISABLE
-  _dcd.irq_enabled = true;
-#else
   if (_dcd.type == NRIO_TYPE_D14) {
     if (_dcd.pending_xfers) {
       int oldIME = enterCriticalSection();
       NRIO_D14_MODE |= NRIO_D14_MODE_GLINTENA;
-      dcd_int_handler(0);
+      dcd_d14_int_handler();
       leaveCriticalSection(oldIME);
     } else {
       NRIO_D14_MODE |= NRIO_D14_MODE_GLINTENA;
@@ -373,28 +391,23 @@ void dcd_int_enable (uint8_t rhport) {
     if (_dcd.pending_xfers) {
       int oldIME = enterCriticalSection();
       irqEnable(IRQ_CART);
-      dcd_int_handler(0);
+      dcd_d12_int_handler();
       leaveCriticalSection(oldIME);
     } else {
       irqEnable(IRQ_CART);
     }
   }
-#endif
 }
 
 // Disable device interrupt
 void dcd_int_disable (uint8_t rhport) {
   (void) rhport;
 
-#ifdef NRIO_USE_SOFTWARE_IRQ_DISABLE
-  _dcd.irq_enabled = false;
-#else
   if (_dcd.type == NRIO_TYPE_D14) {
     NRIO_D14_MODE &= ~NRIO_D14_MODE_GLINTENA;
   } else { /* NRIO_TYPE_D12 */
     irqDisable(IRQ_CART);
   }
-#endif
 }
 
 /**
@@ -446,8 +459,6 @@ static bool nrio_d12_xfer_handle (uint32_t index, uint32_t ep_addr) {
 
   if (tu_edpt_dir(ep_addr) == TUSB_DIR_OUT) {
     // Handle Host->Device transfers
-d12_read_next_buffer:
-    uint16_t total_left_to_read = _dcd.buffer_length[index];
     uint8_t query = nrio_d12_select_query_endpoint(index);
     uint8_t bytes_in_buffer = 0;
 
@@ -457,6 +468,8 @@ d12_read_next_buffer:
       two_buffers = (status & (NRIO_D12_STATUS_BUF0_FULL | NRIO_D12_STATUS_BUF1_FULL)) == (NRIO_D12_STATUS_BUF0_FULL | NRIO_D12_STATUS_BUF1_FULL);
     }
 
+d12_read_next_buffer:
+    uint16_t total_left_to_read = _dcd.buffer_length[index];
     if (query & NRIO_D12_SELECT_EP_FULL) {
       NRIO_D12_CMD = NRIO_D12_CMD_READ_BUFFER;
       NRIO_D12_DATA;
@@ -481,8 +494,11 @@ d12_read_next_buffer:
       dcd_event_xfer_complete(0, ep_addr, _dcd.buffer_total[index], XFER_RESULT_SUCCESS, true);
     } else {
       _dcd.buffer[index] += total_left_to_read;
-      if (two_buffers)
+      if (two_buffers) {
+        two_buffers = false;
+        query = nrio_d12_select_query_endpoint(index);
         goto d12_read_next_buffer;
+      }
     }
   } else {
     // Handle Device->Host transfers
@@ -492,109 +508,114 @@ d12_read_next_buffer:
   return true;
 }
 
-
 TU_ATTR_FAST_FUNC
-void dcd_int_handler (uint8_t rhport) {
-#ifdef NRIO_USE_SOFTWARE_IRQ_DISABLE
-  if (!_dcd.irq_enabled)
-    return;
-#endif
+void dcd_d14_int_handler (void) {
   uint32_t _setup_packet[2];
+  // EPxTX/EPxRX interrupt flags.
+  uint32_t xfers = 0;
 
-  if (_dcd.type == NRIO_TYPE_D14) {
-    // EPxTX/EPxRX interrupt flags.
-    uint32_t xfers = 0;
+  uint16_t mask;
+  mask = NRIO_D14_INT_STL;
+  NRIO_D14_INT_STL = mask;
+  if (mask) {
+    if (mask & NRIO_D14_INTL_BRESET) {
+      NRIO_D14_INT_STL = 0xFFFF;
+      NRIO_D14_INT_STH = 0xFFFF;
+      nrio_d14_bus_init();
+      dcd_event_bus_reset(0, TUSB_SPEED_HIGH, true);
+      return;
+    } else {
+      xfers |= (mask >> 10);
 
-    uint16_t mask;
-    mask = NRIO_D14_INT_STL;
-    NRIO_D14_INT_STL = mask;
-    if (mask) {
-      if (mask & NRIO_D14_INTL_BRESET) {
-        NRIO_D14_INT_STL = 0xFFFF;
-        NRIO_D14_INT_STH = 0xFFFF;
-        nrio_d14_bus_init();
-        dcd_event_bus_reset(0, TUSB_SPEED_HIGH, true);
-        return;
-      } else {
-        xfers |= (mask >> 10);
-
-        if (mask & NRIO_D14_INTL_SOF) {
-          dcd_event_sof(0, NRIO_D14_FRN, true);
-        }
-        if (mask & NRIO_D14_INTL_SUSP) {
-          NRIO_D14_MODE &= ~NRIO_D14_MODE_CLKAON;
-          dcd_event_bus_signal(0, DCD_EVENT_SUSPEND, true);
-        }
-        if (mask & NRIO_D14_INTL_RESUME) {
-          NRIO_D14_MODE |= NRIO_D14_MODE_CLKAON;
-          dcd_event_bus_signal(0, DCD_EVENT_RESUME, true);
-          NRIO_D14_UNLOCK = NRIO_D14_UNLOCK_CODE;
-        }
-        if (mask & NRIO_D14_INTL_EP0SETUP) {
-          NRIO_D14_EP_IDX = NRIO_D14_EP_IDX_EP0_SETUP;
-          _setup_packet[0] = NRIO_D14_EP_DATA32;
-          _setup_packet[1] = NRIO_D14_EP_DATA32;
-          dcd_event_setup_received(0, (uint8_t*) _setup_packet, true);
-        }
+      if (mask & NRIO_D14_INTL_SOF) {
+        dcd_event_sof(0, NRIO_D14_FRN, true);
+      }
+      if (mask & NRIO_D14_INTL_SUSP) {
+        NRIO_D14_MODE &= ~NRIO_D14_MODE_CLKAON;
+        dcd_event_bus_signal(0, DCD_EVENT_SUSPEND, true);
+      }
+      if (mask & NRIO_D14_INTL_RESUME) {
+        NRIO_D14_MODE |= NRIO_D14_MODE_CLKAON;
+        dcd_event_bus_signal(0, DCD_EVENT_RESUME, true);
+        NRIO_D14_UNLOCK = NRIO_D14_UNLOCK_CODE;
+      }
+      if (mask & NRIO_D14_INTL_EP0SETUP) {
+        NRIO_D14_EP_IDX = NRIO_D14_EP_IDX_EP0_SETUP;
+        _setup_packet[0] = NRIO_D14_EP_DATA32;
+        _setup_packet[1] = NRIO_D14_EP_DATA32;
+        dcd_event_setup_received(0, (uint8_t*) _setup_packet, true);
       }
     }
+  }
 
-    mask = NRIO_D14_INT_STH;
-    NRIO_D14_INT_STH = mask;
-    xfers |= (mask << 6) & 0xFFC0;
+  mask = NRIO_D14_INT_STH;
+  NRIO_D14_INT_STH = mask;
+  xfers |= (mask << 6) & 0xFFC0;
 
-    xfers |= _dcd.pending_xfers;
-    // Handle TX/RX interrupts.
-    while (xfers) {
-      uint32_t index = __builtin_clz(xfers) ^ 0x1F;
-      if (nrio_d14_xfer_handle(index, tu_edpt_from_nrio_idx(index))) {
+  xfers |= _dcd.pending_xfers;
+  // Handle TX/RX interrupts.
+  while (xfers) {
+    uint32_t index = __builtin_clz(xfers) ^ 0x1F;
+    if (nrio_d14_xfer_handle(index, tu_edpt_from_nrio_idx(index))) {
+      _dcd.pending_xfers &= ~(1 << index);
+    } else {
+      _dcd.pending_xfers |= (1 << index);
+    }
+    xfers &= ~(1 << index);
+  }
+}
+
+TU_ATTR_FAST_FUNC
+void dcd_d12_int_handler (void) {
+  uint32_t _setup_packet[2];
+  uint16_t mask = nrio_d12_read_int();
+
+  if (mask & NRIO_D12_INT_BUS_RESET) {
+    nrio_d12_bus_init();
+    dcd_event_bus_reset(0, TUSB_SPEED_FULL, true);
+  }
+  if (mask & NRIO_D12_INT_SUSPEND_CHANGE) {
+    dcd_event_bus_signal(0, DCD_EVENT_SUSPEND, true);
+  }
+
+  // Handle endpoint events
+  uint32_t xfers = mask & 0x3F;
+  xfers |= _dcd.pending_xfers;
+  while (xfers) {
+    uint32_t index = __builtin_clz(xfers) ^ 0x1F;
+    mask = nrio_d12_read_endpoint_t_status(index);
+#if 0
+    if (mask & NRIO_D12_T_ERROR_MASK) {
+      TU_LOG(1, "DCD EP %02X Error %X\n", (int) tu_edpt_from_nrio_idx(index), (int) ((mask >> 1) & 0xF)); */
+#endif
+    if (mask & NRIO_D12_T_STATUS_SETUP) {
+      nrio_d12_select_endpoint(index);
+      nrio_d12_rx_bytes(_setup_packet, 8);
+      nrio_d12_acknowledge_setup();
+      nrio_d12_clear_buffer();
+      // 11.3.10 - acknowledge SETUP on IN buffer too
+      nrio_d12_select_endpoint(index | 1);
+      nrio_d12_acknowledge_setup();
+      nrio_d12_clear_buffer();
+
+      dcd_event_setup_received(0, (uint8_t*) _setup_packet, true);
+    } else {
+      if (nrio_d12_xfer_handle(index, tu_edpt_from_nrio_idx(index))) {
         _dcd.pending_xfers &= ~(1 << index);
       } else {
         _dcd.pending_xfers |= (1 << index);
       }
-      xfers &= ~(1 << index);
     }
+    xfers &= ~(1 << index);
+  }
+}
+
+TU_ATTR_FAST_FUNC
+void dcd_int_handler (uint8_t rhport) {
+  if (_dcd.type == NRIO_TYPE_D14) {
+    dcd_d14_int_handler();
   } else { /* NRIO_TYPE_D12 */
-    uint16_t mask = nrio_d12_read_int();
-
-    if (mask & NRIO_D12_INT_BUS_RESET) {
-      nrio_d12_bus_init();
-      dcd_event_bus_reset(0, TUSB_SPEED_FULL, true);
-    }
-    if (mask & NRIO_D12_INT_SUSPEND_CHANGE) {
-      dcd_event_bus_signal(0, DCD_EVENT_SUSPEND, true);
-    }
-
-    // Handle endpoint events
-    uint32_t xfers = mask & 0x3F;
-    xfers |= _dcd.pending_xfers;
-    while (xfers) {
-      uint32_t index = __builtin_clz(xfers) ^ 0x1F;
-      mask = nrio_d12_read_endpoint_t_status(index);
-#if 0
-      if (mask & NRIO_D12_T_ERROR_MASK) {
-        TU_LOG(1, "DCD EP %02X Error %X\n", (int) tu_edpt_from_nrio_idx(index), (int) ((mask >> 1) & 0xF)); */
-#endif
-      if (mask & NRIO_D12_T_STATUS_SETUP) {
-        nrio_d12_select_endpoint(index);
-        nrio_d12_rx_bytes(_setup_packet, 8);
-        nrio_d12_acknowledge_setup();
-        nrio_d12_clear_buffer();
-        // 11.3.10 - acknowledge SETUP on IN buffer too
-        nrio_d12_select_endpoint(index | 1);
-        nrio_d12_acknowledge_setup();
-        nrio_d12_clear_buffer();
-
-        dcd_event_setup_received(0, (uint8_t*) _setup_packet, true);
-      } else {
-        if (nrio_d12_xfer_handle(index, tu_edpt_from_nrio_idx(index))) {
-          _dcd.pending_xfers &= ~(1 << index);
-        } else {
-          _dcd.pending_xfers |= (1 << index);
-        }
-      }
-      xfers &= ~(1 << index);
-    }
+    dcd_d12_int_handler();
   }
 }
 
