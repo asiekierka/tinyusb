@@ -145,6 +145,8 @@ void dcd_enter_test_mode(uint8_t rhport, tusb_feature_test_mode_t test_selector)
 // Endpoint API
 //--------------------------------------------------------------------+
 
+uint8_t dcd_edpt0_get_size(void);
+
 // Invoked when a control transfer's status stage is complete.
 // May help DCD to prepare for next control transfer, this API is optional.
 void dcd_edpt0_status_complete(uint8_t rhport, tusb_control_request_t const * request);
