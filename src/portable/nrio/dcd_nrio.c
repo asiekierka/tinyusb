@@ -318,8 +318,8 @@ bool dcd_init(uint8_t rhport, const tusb_rhport_init_t* rh_init) {
   } else { /* NRIO_TYPE_D12 */
     nrio_d12_bus_init();
 
-    _dcd.d12_mode = 0;
-    nrio_d12_set_mode(NRIO_D12_MODE_CFG_CLKAON | NRIO_D12_MODE_CFG_NO_LAZYCLK);
+    _dcd.d12_mode = 0xFF;
+    nrio_d12_set_mode(0);
     nrio_d12_set_dma(NRIO_D12_DMA_CFG_IRQ_PKT | NRIO_D12_DMA_CFG_IRQ_VALID);
     for (int i = 0; i < 60; i++) cothread_yield_irq(IRQ_VBLANK);
   }
