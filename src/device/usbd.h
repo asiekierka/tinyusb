@@ -120,6 +120,8 @@ bool tud_control_xfer(uint8_t rhport, tusb_control_request_t const * request, vo
 // Send STATUS (zero length) packet
 bool tud_control_status(uint8_t rhport, tusb_control_request_t const * request);
 
+uint8_t tud_edpt0_get_size(void);
+
 //--------------------------------------------------------------------+
 // Application Callbacks
 //--------------------------------------------------------------------+

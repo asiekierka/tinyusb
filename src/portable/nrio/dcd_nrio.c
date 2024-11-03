@@ -25,7 +25,6 @@
  * This file is part of the TinyUSB stack.
  */
 
-#include "nds/dma.h"
 #include "tusb_option.h"
 
 #if CFG_TUD_ENABLED && CFG_TUSB_MCU == OPT_MCU_NRIO
@@ -38,141 +37,17 @@
  */
 
 // #define NRIO_USE_SOFTWARE_IRQ_DISABLE
-
-// Use ASM transmit/receive helpers.
-#define NRIO_USE_ASM_TXRX
-
-#define NRIO_SUPPORT_LARGE_TRANSFERS
-
 // #define CFG_TUD_NRIO_DMA_CHANNEL 3
 
 /**
  * NRIO register defines.
  *
- * The NRIO (DS-Writer etc.) is an ISP1581-compatible chip exposed via the
- * Slot-2 (GBA cartridge) bus interface, albeit without the ability to use
- * DMA.
+ * To match official firmware naming, "D14" refers to the ISP1581/compatible,
+ * while "D12" refers to the PDIUSBD12.
  */
 
-#define NRIO_REG(index) GBA_BUS[(index) * 0x10000]
-
-#define NRIO_DEVEN_ENABLE  BIT(7)
-#define NRIO_DEVEN_ADDR(n) (n)
-#define NRIO_DEVEN     NRIO_REG(0x00)
-
-#define NRIO_MODE_CLKAON   BIT(7)
-#define NRIO_MODE_SNDRSU   BIT(6)
-#define NRIO_MODE_GOSUSP   BIT(5)
-#define NRIO_MODE_SFRESET  BIT(4)
-#define NRIO_MODE_GLINTENA BIT(3)
-#define NRIO_MODE_WKUPCS   BIT(2)
-#define NRIO_MODE_PWROFF   BIT(1)
-#define NRIO_MODE_SOFTCT   BIT(0)
-#define NRIO_MODE      NRIO_REG(0x0C)
-
-#define NRIO_INT_CFG_POL_LOW       (0)
-#define NRIO_INT_CFG_POL_HIGH      BIT(0)
-#define NRIO_INT_CFG_SIG_LEVEL     (0)
-#define NRIO_INT_CFG_SIG_PULSED    BIT(1)
-#define NRIO_INT_CFG_DDBGMODOUT(n) ((n) << 2)
-#define NRIO_INT_CFG_DDBGMODIN(n)  ((n) << 4)
-#define NRIO_INT_CFG_CDBGMOD(n)    ((n) << 6)
-#define NRIO_INT_CFG   NRIO_REG(0x10)
-
-#define NRIO_INTL_BRESET   BIT(0)
-#define NRIO_INTL_SOF      BIT(1)
-#define NRIO_INTL_PSOF     BIT(2)
-#define NRIO_INTL_SUSP     BIT(3)
-#define NRIO_INTL_RESUME   BIT(4)
-#define NRIO_INTL_HS_STAT  BIT(5)
-#define NRIO_INTL_DMA      BIT(6)
-#define NRIO_INTL_EP0SETUP BIT(8)
-#define NRIO_INTL_EP0RX    BIT(10)
-#define NRIO_INTL_EP0TX    BIT(11)
-#define NRIO_INTL_EP1RX    BIT(12)
-#define NRIO_INTL_EP1TX    BIT(13)
-#define NRIO_INTL_EP2RX    BIT(14)
-#define NRIO_INTL_EP2TX    BIT(15)
-#define NRIO_INTL_ALL      0xFD7F
-#define NRIO_INTL_ALL_NON_EDPT 0x017F
-#define NRIO_INTH_EP3RX    BIT(0)
-#define NRIO_INTH_EP3TX    BIT(1)
-#define NRIO_INTH_EP4RX    BIT(2)
-#define NRIO_INTH_EP4TX    BIT(3)
-#define NRIO_INTH_EP5RX    BIT(4)
-#define NRIO_INTH_EP5TX    BIT(5)
-#define NRIO_INTH_EP6RX    BIT(6)
-#define NRIO_INTH_EP6TX    BIT(7)
-#define NRIO_INTH_EP7RX    BIT(8)
-#define NRIO_INTH_EP7TX    BIT(9)
-#define NRIO_INTH_ALL      0x03FF
-#define NRIO_INTH_ALL_NON_EDPT 0x0000
-#define NRIO_INT_ENL   NRIO_REG(0x14)
-#define NRIO_INT_ENH   NRIO_REG(0x16)
-#define NRIO_INT_STL   NRIO_REG(0x18)
-#define NRIO_INT_STH   NRIO_REG(0x1A)
-
-#define NRIO_EP_IDX_OUT       (0)
-#define NRIO_EP_IDX_IN        BIT(0)
-#define NRIO_EP_IDX_IDX(n)    ((n) << 1)
-#define NRIO_EP_IDX_EP0_DATA  (0)
-#define NRIO_EP_IDX_EP0_SETUP BIT(5)
-#define NRIO_EP_IDX    NRIO_REG(0x2C)
-
-#define NRIO_EP_CFG_STALL         BIT(0)
-#define NRIO_EP_CFG_STATUS        BIT(1)
-#define NRIO_EP_CFG_VENDP         BIT(3)
-#define NRIO_EP_CFG_CLBUF         BIT(4)
-#define NRIO_EP_CFG    NRIO_REG(0x28)
-
-#define NRIO_EP_DATA   NRIO_REG(0x20)
-#define NRIO_EP_DATA32 (*((vu32*) &NRIO_REG(0x20)))
-#define NRIO_EP_BUFLEN NRIO_REG(0x1C)
-
-#define NRIO_EP_PKT_FIFO_LEN(n) (n)
-#define NRIO_EP_PKT_NTRANS(n)   (((n) - 1) << 11)
-#define NRIO_EP_PKT    NRIO_REG(0x04)
-
-#define NRIO_EP_TYPE_CTRL    (0)
-#define NRIO_EP_TYPE_ISO     (1)
-#define NRIO_EP_TYPE_BULK    (2)
-#define NRIO_EP_TYPE_INT     (3)
-#define NRIO_EP_TYPE_DBLBUF  BIT(2)
-#define NRIO_EP_TYPE_ENABLE  BIT(3)
-#define NRIO_EP_TYPE_NOEMPKT BIT(4)
-#define NRIO_EP_TYPE   NRIO_REG(0x08)
-
-#define NRIO_EP_SHORT_OUT(n) ((n) << 8)
-#define NRIO_EP_SHORT_OUT0   NRIO_EP_SHORT_OUT(0)
-#define NRIO_EP_SHORT_OUT1   NRIO_EP_SHORT_OUT(1)
-#define NRIO_EP_SHORT_OUT2   NRIO_EP_SHORT_OUT(2)
-#define NRIO_EP_SHORT_OUT3   NRIO_EP_SHORT_OUT(3)
-#define NRIO_EP_SHORT_OUT4   NRIO_EP_SHORT_OUT(4)
-#define NRIO_EP_SHORT_OUT5   NRIO_EP_SHORT_OUT(5)
-#define NRIO_EP_SHORT_OUT6   NRIO_EP_SHORT_OUT(6)
-#define NRIO_EP_SHORT_OUT7   NRIO_EP_SHORT_OUT(7)
-#define NRIO_EP_SHORT  NRIO_REG(0x24)
-
-#define NRIO_CHIP_IDL  NRIO_REG(0x70)
-#define NRIO_CHIP_IDH  NRIO_REG(0x72)
-
-#define NRIO_FRN_MICROSOF(n) ((n) << 11)
-#define NRIO_FRN_SOF(n)      (n)
-#define NRIO_FRN       NRIO_REG(0x74)
-#define NRIO_SCRATCH   NRIO_REG(0x78)
-
-#define NRIO_UNLOCK_CODE 0xAA37
-#define NRIO_UNLOCK    NRIO_REG(0x7C)
-
-#define NRIO_TEST_FORCEHS BIT(7)
-#define NRIO_TEST_PHYTEST BIT(6)
-#define NRIO_TEST_LPBK    BIT(5)
-#define NRIO_TEST_FORCEFS BIT(4)
-#define NRIO_TEST_PRBS    BIT(3)
-#define NRIO_TEST_KSTATE  BIT(2)
-#define NRIO_TEST_JSTATE  BIT(1)
-#define NRIO_TEST_SE0_NAK BIT(0)
-#define NRIO_TEST      NRIO_REG(0x84)
+#include "nrio_d12.h"
+#include "nrio_d14.h"
 
 /**
  * Helper macros, defines, etc.
@@ -186,18 +61,32 @@
 // Default interrupt enable masks.
 // SOF is enabled on demand; PSOF and DMA are not used.
 // TODO: Enable EPxTX/EPxRX on demand.
-#define NRIQ_INTL_DEFAULT (NRIO_INTL_ALL & ~(NRIO_INTL_DMA | NRIO_INTL_PSOF | NRIO_INTL_SOF))
-#define NRIQ_INTH_DEFAULT NRIO_INTH_ALL
+#define NRIO_D14_INTL_DEFAULT (NRIO_D14_INTL_ALL & ~(NRIO_D14_INTL_DMA | NRIO_D14_INTL_PSOF | NRIO_D14_INTL_SOF))
+#define NRIO_D14_INTH_DEFAULT NRIO_D14_INTH_ALL
+
+#define NRIO_TYPE_D14 1
+#define NRIO_TYPE_D12 2
+
+#define NRIO_D14_MAX_PACKET_SIZE 512
+#define NRIO_D12_MAX_PACKET_SIZE(nrio_addr) (((nrio_addr) < 4) ? 16 : 64)
+
+#define NRIO_D12_MODE_CLK_DEFAULT (NRIO_D12_MODE_CLK_INITIAL | NRIO_D12_MODE_CLK_DIV(8))
+
+#define DCD_BUFFER_NONE 0xFFFFFFFF
 
 // Device driver state.
-DTCM_BSS
 static struct {
-  uint8_t *buffer[TUP_DCD_ENDPOINT_MAX * 2];
-  uint16_t buffer_length[TUP_DCD_ENDPOINT_MAX * 2];
-#ifdef NRIO_SUPPORT_LARGE_TRANSFERS
-  uint16_t buffer_total[TUP_DCD_ENDPOINT_MAX * 2];
-#endif
-  uint16_t xfer_mask;
+  uint8_t *buffer[CFG_TUD_ENDPPOINT_MAX * 2];
+  uint16_t buffer_length[CFG_TUD_ENDPPOINT_MAX * 2];
+  uint16_t buffer_total[CFG_TUD_ENDPPOINT_MAX * 2];
+  /**
+   * Transfers (particularly host->device) which we have received an IRQ for,
+   * but did not yet have a buffer configured; or which have a buffer configured,
+   * but did not yet have data on the USB controller.
+   */
+  uint16_t pending_xfers;
+  uint8_t type; // Controller type
+  uint8_t d12_mode; // D12 mode register
 #ifdef NRIO_USE_SOFTWARE_IRQ_DISABLE
   bool irq_enabled;
 #endif
@@ -233,94 +122,160 @@ void dcd_int_handler (uint8_t rhport);
 /* Device API
  *------------------------------------------------------------------*/
 
-extern void dcd_nrio_tx_bytes(const void *buffer, uint32_t len);
-extern void dcd_nrio_rx_bytes(void *buffer, uint32_t len);
+extern void nrio_d14_tx_bytes(const void *buffer, uint32_t len);
+extern void nrio_d14_rx_bytes(void *buffer, uint32_t len);
+
+TU_ATTR_FAST_FUNC
+static void nrio_d12_tx_bytes(const void *_buffer, uint32_t len) {
+  const uint8_t *buffer = (const uint8_t*) _buffer;
+  NRIO_D12_CMD = NRIO_D12_CMD_WRITE_BUFFER;
+  NRIO_D12_DATA = 0;
+  NRIO_D12_DATA = len;
+  while (len--)
+    NRIO_D12_DATA = *(buffer++);
+}
+
+TU_ATTR_FAST_FUNC
+static void nrio_d12_rx_bytes(void *_buffer, uint32_t len) {
+  uint8_t *buffer = (uint8_t*) _buffer;
+  NRIO_D12_CMD = NRIO_D12_CMD_READ_BUFFER;
+  NRIO_D12_DATA;
+  uint8_t buf_len = NRIO_D12_DATA;
+  if (buf_len > len)
+    buf_len = len;
+  while (len--)
+    *(buffer++) = NRIO_D12_DATA;
+}
+
+static void nrio_d12_update_mode(void) {
+    NRIO_D12_CMD = NRIO_D12_CMD_SET_MODE;
+    NRIO_D12_DATA = _dcd.d12_mode;
+    NRIO_D12_DATA = NRIO_D12_MODE_CLK_DEFAULT >> 8;
+}
 
 __attribute__((always_inline))
-static inline void dcd_nrio_tx_packet(uint32_t idx, uint32_t ep_addr, bool ack) {
+static inline void nrio_d12_set_mode(uint8_t val) {
+  if (_dcd.d12_mode != val) {
+    _dcd.d12_mode = val;
+    nrio_d12_update_mode();
+  }
+}
+
+static void nrio_d14_tx_packet(uint32_t idx, uint32_t ep_addr, bool ack) {
   uint32_t total_bytes = _dcd.buffer_length[idx];
   uint32_t bytes_to_tx = total_bytes;
-#ifdef NRIO_SUPPORT_LARGE_TRANSFERS
-  if (bytes_to_tx > 512)
-    bytes_to_tx = 512;
-#endif
+  if (bytes_to_tx > NRIO_D14_MAX_PACKET_SIZE)
+    bytes_to_tx = NRIO_D14_MAX_PACKET_SIZE;
 
   if (ack) {
-#ifdef NRIO_SUPPORT_LARGE_TRANSFERS
     total_bytes -= bytes_to_tx;
     _dcd.buffer[idx] += bytes_to_tx;
     _dcd.buffer_length[idx] = total_bytes;
 
     bytes_to_tx = total_bytes;
     if (!bytes_to_tx) {
+      _dcd.buffer[idx] = (void*) DCD_BUFFER_NONE;
       dcd_event_xfer_complete(0, ep_addr, _dcd.buffer_total[idx], XFER_RESULT_SUCCESS, true);
       return;
     }
-    if (bytes_to_tx > 512)
-      bytes_to_tx = 512;
-#else
-    dcd_event_xfer_complete(0, ep_addr, _dcd.buffer_length[idx], XFER_RESULT_SUCCESS, true);
-    _dcd.buffer_length[idx] = 0;
-    return;
-#endif
+    if (bytes_to_tx > NRIO_D14_MAX_PACKET_SIZE)
+      bytes_to_tx = NRIO_D14_MAX_PACKET_SIZE;
   }
 
-  NRIO_EP_IDX = idx;
-  NRIO_EP_BUFLEN = bytes_to_tx;
+  NRIO_D14_EP_IDX = idx;
+  NRIO_D14_EP_BUFLEN = bytes_to_tx;
 
 #ifdef CFG_TUD_NRIO_DMA_CHANNEL
   while (DMA_CR(CFG_TUD_NRIO_DMA_CHANNEL) & DMA_BUSY);
 
-  //dmaSetParams(CFG_TUD_NRIO_DMA_CHANNEL, _dcd.buffer[idx], (void*) &NRIO_EP_DATA, DMA_COPY_HALFWORDS | DMA_SRC_INC | DMA_DST_FIX | ((bytes_to_tx + 1) >> 1));
-  dmaSetParams(CFG_TUD_NRIO_DMA_CHANNEL, _dcd.buffer[idx], (void*) &NRIO_EP_DATA, DMA_COPY_WORDS | DMA_SRC_INC | DMA_DST_FIX | ((bytes_to_tx + 3) >> 2));
+  //dmaSetParams(CFG_TUD_NRIO_DMA_CHANNEL, _dcd.buffer[idx], (void*) &NRIO_D14_EP_DATA, DMA_COPY_HALFWORDS | DMA_SRC_INC | DMA_DST_FIX | ((bytes_to_tx + 1) >> 1));
+  dmaSetParams(CFG_TUD_NRIO_DMA_CHANNEL, _dcd.buffer[idx], (void*) &NRIO_D14_EP_DATA, DMA_COPY_WORDS | DMA_SRC_INC | DMA_DST_FIX | ((bytes_to_tx + 3) >> 2));
 #else
-#ifdef NRIO_USE_ASM_TXRX
-  dcd_nrio_tx_bytes(_dcd.buffer[idx], bytes_to_tx);
-#else
-  uint32_t *buffer = (uint32_t*) _dcd.buffer[idx];
-  for (int i = 0; i < (bytes_to_tx + 3) >> 2; i++)
-    NRIO_EP_DATA32 = buffer[i];
-#endif
+  nrio_d14_tx_bytes(_dcd.buffer[idx], bytes_to_tx);
 #endif
 }
 
-/**
- * @brief Post-bus reset initialization.
- */
-static void dcd_bus_init (void) {
-  // Reinitialize _dcd.
+__attribute__((noinline))
+TU_ATTR_FAST_FUNC
+static uint32_t nrio_d12_tx_packet(uint32_t idx, uint32_t ep_addr, bool ack) {
+  uint32_t total_bytes = _dcd.buffer_length[idx];
+  uint32_t bytes_to_tx = total_bytes;
+  if (bytes_to_tx > NRIO_D12_MAX_PACKET_SIZE(idx))
+    bytes_to_tx = NRIO_D12_MAX_PACKET_SIZE(idx);
+
+  if (ack) {
+    total_bytes -= bytes_to_tx;
+    _dcd.buffer[idx] += bytes_to_tx;
+    _dcd.buffer_length[idx] = total_bytes;
+
+    bytes_to_tx = total_bytes;
+    if (!bytes_to_tx) {
+      _dcd.buffer[idx] = (void*) DCD_BUFFER_NONE;
+      dcd_event_xfer_complete(0, ep_addr, _dcd.buffer_total[idx], XFER_RESULT_SUCCESS, true);
+      return bytes_to_tx;
+    }
+    if (bytes_to_tx > NRIO_D12_MAX_PACKET_SIZE(idx))
+      bytes_to_tx = NRIO_D12_MAX_PACKET_SIZE(idx);
+  }
+
+  nrio_d12_select_endpoint(idx);
+  nrio_d12_tx_bytes(_dcd.buffer[idx], bytes_to_tx);
+  nrio_d12_validate_buffer();
+  return bytes_to_tx;
+}
+
+static void dcd_clear_after_bus_reset (void) {
   int oldIME = enterCriticalSection();
-  memset(_dcd.buffer_length, 0, sizeof(_dcd.buffer_length));
-  _dcd.xfer_mask = 0;
+  memset(_dcd.buffer, 0xFF, sizeof(_dcd.buffer));
+  _dcd.pending_xfers = 0;
   leaveCriticalSection(oldIME);
+}
+
+static void nrio_d14_bus_init (void) {
+  dcd_clear_after_bus_reset();
 
   // Configure interrupts
-  NRIO_INT_CFG = NRIO_INT_CFG_CDBGMOD(1) | NRIO_INT_CFG_DDBGMODIN(1) | NRIO_INT_CFG_DDBGMODOUT(1)
-    | NRIO_INT_CFG_SIG_LEVEL | NRIO_INT_CFG_POL_HIGH;
+  NRIO_D14_INT_CFG = NRIO_D14_INT_CFG_CDBGMOD(1) | NRIO_D14_INT_CFG_DDBGMODIN(1) | NRIO_D14_INT_CFG_DDBGMODOUT(1)
+    | NRIO_D14_INT_CFG_SIG_LEVEL | NRIO_D14_INT_CFG_POL_HIGH;
 
-  NRIO_INT_ENL = NRIQ_INTL_DEFAULT;
-  NRIO_INT_ENH = NRIQ_INTH_DEFAULT;
+  NRIO_D14_INT_ENL = NRIO_D14_INTL_DEFAULT;
+  NRIO_D14_INT_ENH = NRIO_D14_INTH_DEFAULT;
 
   // Configure control endpoints
   dcd_edpt_open(0, &ep0OUT_desc);
   dcd_edpt_open(0, &ep0IN_desc);
 
   // Enable device
-  NRIO_DEVEN = NRIO_DEVEN_ENABLE;
+  NRIO_D14_DEVEN = NRIO_D14_DEVEN_ENABLE;
 }
 
-static void nrio_reset (void) {
+static void nrio_d12_bus_init (void) {
+  dcd_clear_after_bus_reset();
+}
+
+static void nrio_d14_reset (void) {
   // Reset USB controller
-  NRIO_MODE = NRIO_MODE_SFRESET;
+  NRIO_D14_MODE = NRIO_D14_MODE_SFRESET;
   swiDelay(8378); // 1ms
-  NRIO_MODE = 0;
+  NRIO_D14_MODE = 0;
   swiDelay(8378); // 1ms
 
-  NRIO_MODE = NRIO_MODE_GLINTENA | NRIO_MODE_CLKAON;
+  NRIO_D14_MODE = NRIO_D14_MODE_GLINTENA | NRIO_D14_MODE_CLKAON;
+}
+
+uint32_t dcd_read_chip_id (void) {
+  if (_dcd.type == NRIO_TYPE_D14) {
+    return ((NRIO_D14_CHIP_IDH << 16) | NRIO_D14_CHIP_IDL) & 0xFFFFFF;
+  } else { /* NRIO_TYPE_D12 */
+    return nrio_d12_read_chip_id() << 8;
+  }
 }
 
 // Initialize controller to device mode
 bool dcd_init(uint8_t rhport, const tusb_rhport_init_t* rh_init) {
+  if (isDSiMode())
+    return false;
+
   // Configure GBA cartridge bus
 #ifdef ARM9
   sysSetCartOwner(BUS_OWNER_ARM9);
@@ -331,40 +286,70 @@ bool dcd_init(uint8_t rhport, const tusb_rhport_init_t* rh_init) {
     | EXMEMCNT_ROM_TIME2_4_CYCLES | EXMEMCNT_SRAM_TIME_6_CYCLES;
 
   // Check if the chip is an ISP1581/82/83
-  uint32_t chip_id = ((NRIO_CHIP_IDH << 16) | NRIO_CHIP_IDL) & 0xFFFFFF;
-  if (!(chip_id >= 0x158100 && chip_id < 0x158400))
-    return false;
+  uint32_t d14_chip_id = ((NRIO_D14_CHIP_IDH << 16) | NRIO_D14_CHIP_IDL) & 0xFFFFFF;
+  if (d14_chip_id >= 0x158100 && d14_chip_id < 0x158400) {
+    _dcd.type = NRIO_TYPE_D14;
+    TU_LOG(3, "Detected D14 chip (%06X)\n", (int) d14_chip_id);
+  } else {
+    // The D12 supports a maximum readout speed of 2 MHz.
+    REG_EXMEMCNT = (REG_EXMEMCNT & ~0x1F) | EXMEMCNT_ROM_TIME1_18_CYCLES
+      | EXMEMCNT_ROM_TIME2_6_CYCLES | EXMEMCNT_SRAM_TIME_18_CYCLES;
 
-  irqSet(IRQ_CART, (VoidFn) dcd_int_handler);
+    // Check if the chip is an PDIUSBD12 (do other compatible chips exist?)
+    uint16_t chip_id = nrio_d12_read_chip_id();
+    if (chip_id != 0x0000 && chip_id != 0xFFFF) {
+      _dcd.type = NRIO_TYPE_D12;
+
+      TU_LOG(3, "Detected D12 chip (%04X)\n", chip_id);
+    } else {
+      return false;
+    }
+  }
+  
 #ifdef NRIO_USE_SOFTWARE_IRQ_DISABLE
   _dcd.irq_enabled = false;
 #endif
+  irqSet(IRQ_CART, (VoidFn) dcd_int_handler);
   irqEnable(IRQ_CART);
 
-  nrio_reset();
-  dcd_bus_init();
+  if (_dcd.type == NRIO_TYPE_D14) {
+    nrio_d14_reset();
+    nrio_d14_bus_init();
+  } else { /* NRIO_TYPE_D12 */
+    nrio_d12_bus_init();
+
+    _dcd.d12_mode = 0;
+    nrio_d12_set_mode(NRIO_D12_MODE_CFG_CLKAON | NRIO_D12_MODE_CFG_NO_LAZYCLK);
+    nrio_d12_set_dma(NRIO_D12_DMA_CFG_IRQ_PKT | NRIO_D12_DMA_CFG_IRQ_VALID);
+    for (int i = 0; i < 60; i++) cothread_yield_irq(IRQ_VBLANK);
+  }
   dcd_connect(rhport);
   return true;
 }
 
 bool dcd_deinit(uint8_t rhport) {
   // Check if the chip is an ISP1581/82/83
-  uint32_t chip_id = ((NRIO_CHIP_IDH << 16) | NRIO_CHIP_IDL) & 0xFFFFFF;
-  if (!(chip_id >= 0x158100 && chip_id < 0x158400))
+  if (_dcd.type == 0)
     return true;
 
-  // Reset USB controller
-  NRIO_MODE = NRIO_MODE_SFRESET;
-  swiDelay(8378); // 1ms
-  NRIO_MODE = 0;
-  swiDelay(8378); // 1ms
+  if (_dcd.type == NRIO_TYPE_D14) {
+    // Reset USB controller
+    NRIO_D14_MODE = NRIO_D14_MODE_SFRESET;
+    swiDelay(8378); // 1ms
+    NRIO_D14_MODE = 0;
+    swiDelay(8378); // 1ms
 
-  // Suspend USB controller
-  NRIO_MODE = NRIO_MODE_GOSUSP;
-  swiDelay(8378); // 1ms
-  NRIO_MODE = 0;
-  swiDelay(8378); // 1ms
+    // Suspend USB controller
+    NRIO_D14_MODE = NRIO_D14_MODE_GOSUSP;
+    swiDelay(8378); // 1ms
+    NRIO_D14_MODE = 0;
+    swiDelay(8378); // 1ms
+  } else { /* NRIO_TYPE_D12 */
+    nrio_d12_set_endpoint(0);
+    nrio_d12_set_address(0);
+  }
 
+  _dcd.type = 0;
   return true;
 }
 
@@ -375,13 +360,24 @@ void dcd_int_enable (uint8_t rhport) {
 #ifdef NRIO_USE_SOFTWARE_IRQ_DISABLE
   _dcd.irq_enabled = true;
 #else
-  if (_dcd.xfer_mask) {
-    int oldIME = enterCriticalSection();
-    NRIO_MODE |= NRIO_MODE_GLINTENA;
-    dcd_int_handler(0);
-    leaveCriticalSection(oldIME);
-  } else {
-    NRIO_MODE |= NRIO_MODE_GLINTENA;
+  if (_dcd.type == NRIO_TYPE_D14) {
+    if (_dcd.pending_xfers) {
+      int oldIME = enterCriticalSection();
+      NRIO_D14_MODE |= NRIO_D14_MODE_GLINTENA;
+      dcd_int_handler(0);
+      leaveCriticalSection(oldIME);
+    } else {
+      NRIO_D14_MODE |= NRIO_D14_MODE_GLINTENA;
+    }
+  } else { /* NRIO_TYPE_D12 */
+    if (_dcd.pending_xfers) {
+      int oldIME = enterCriticalSection();
+      irqEnable(IRQ_CART);
+      dcd_int_handler(0);
+      leaveCriticalSection(oldIME);
+    } else {
+      irqEnable(IRQ_CART);
+    }
   }
 #endif
 }
@@ -393,7 +389,11 @@ void dcd_int_disable (uint8_t rhport) {
 #ifdef NRIO_USE_SOFTWARE_IRQ_DISABLE
   _dcd.irq_enabled = false;
 #else
-  NRIO_MODE &= ~NRIO_MODE_GLINTENA;
+  if (_dcd.type == NRIO_TYPE_D14) {
+    NRIO_D14_MODE &= ~NRIO_D14_MODE_GLINTENA;
+  } else { /* NRIO_TYPE_D12 */
+    irqDisable(IRQ_CART);
+  }
 #endif
 }
 
@@ -406,50 +406,90 @@ void dcd_int_disable (uint8_t rhport) {
  * @return bool Whether or not the event was processed.
  */
 TU_ATTR_FAST_FUNC
-static bool dcd_xfer_handle (uint32_t nrio_addr, uint32_t ep_addr) {
-  uint16_t expected_length = _dcd.buffer_length[nrio_addr];
-
-  if (!expected_length)
+static bool nrio_d14_xfer_handle (uint32_t nrio_addr, uint32_t ep_addr) {
+  if (((uintptr_t) _dcd.buffer[nrio_addr]) == DCD_BUFFER_NONE)
     return false;
 
   if (tu_edpt_dir(ep_addr) == TUSB_DIR_OUT) {
     // Handle Host->Device transfers
-    NRIO_EP_IDX = nrio_addr;
-    uint16_t received_bytes = NRIO_EP_BUFLEN;
-    if (!received_bytes)
+    uint16_t total_left_to_read = _dcd.buffer_length[nrio_addr];
+    NRIO_D14_EP_IDX = nrio_addr;
+    uint16_t bytes_in_buffer = NRIO_D14_EP_BUFLEN;
+    if (total_left_to_read && !bytes_in_buffer)
       return false;
-    if (expected_length > received_bytes)
-      expected_length = received_bytes;
+    if (total_left_to_read > bytes_in_buffer)
+      total_left_to_read = bytes_in_buffer;
 
     // Copy data from NRIO to buffer
-#ifdef NRIO_USE_ASM_TXRX
-    dcd_nrio_rx_bytes(_dcd.buffer[nrio_addr], expected_length);
-#else
-    uint16_t *buf = (uint16_t*) _dcd.buffer[nrio_addr];    
-    for (int i = 0; i < expected_length >> 1; i++)
-      buf[i] = NRIO_EP_DATA;
-    if (expected_length & 1)
-      ((uint8_t*) buf)[expected_length - 1] = NRIO_EP_DATA;
-#endif
+    nrio_d14_rx_bytes(_dcd.buffer[nrio_addr], total_left_to_read);
 
     // Signal end of transfer
-#ifdef NRIO_SUPPORT_LARGE_TRANSFERS
-    _dcd.buffer_length[nrio_addr] -= expected_length;
-    if (received_bytes < 512 || !_dcd.buffer_length[nrio_addr])
+    _dcd.buffer_length[nrio_addr] -= total_left_to_read;
+    if (bytes_in_buffer < NRIO_D14_MAX_PACKET_SIZE || !_dcd.buffer_length[nrio_addr]) {
+      _dcd.buffer[nrio_addr] = (void*) DCD_BUFFER_NONE;
       dcd_event_xfer_complete(0, ep_addr, _dcd.buffer_total[nrio_addr], XFER_RESULT_SUCCESS, true);
-    else
-      _dcd.buffer[nrio_addr] += expected_length;
-#else
-    dcd_event_xfer_complete(0, ep_addr, expected_length, XFER_RESULT_SUCCESS, true);
-    _dcd.buffer_length[nrio_addr] = 0;
-#endif
+    } else {
+      _dcd.buffer[nrio_addr] += total_left_to_read;
+    }
   } else {
     // Handle Device->Host transfers
-    dcd_nrio_tx_packet(nrio_addr, ep_addr, true);
+    nrio_d14_tx_packet(nrio_addr, ep_addr, true);
   }
 
   return true;
 }
+
+TU_ATTR_FAST_FUNC
+static bool nrio_d12_xfer_handle (uint32_t nrio_addr, uint32_t ep_addr) {
+  if (((uintptr_t) _dcd.buffer[nrio_addr]) == DCD_BUFFER_NONE)
+    return false;
+
+  if (tu_edpt_dir(ep_addr) == TUSB_DIR_OUT) {
+    // Handle Host->Device transfers
+d12_read_next_buffer:
+    uint16_t total_left_to_read = _dcd.buffer_length[nrio_addr];
+    uint8_t status = nrio_d12_select_query_endpoint(nrio_addr);
+    uint8_t bytes_in_buffer = 0;
+
+    if (status & NRIO_D12_SELECT_EP_FULL) {
+      NRIO_D12_CMD = NRIO_D12_CMD_READ_BUFFER;
+      NRIO_D12_DATA;
+      bytes_in_buffer = NRIO_D12_DATA;
+      if (total_left_to_read > bytes_in_buffer)
+        total_left_to_read = bytes_in_buffer;
+
+      // Copy data from NRIO to buffer
+      for (int i = 0; i < total_left_to_read; i++)
+        _dcd.buffer[nrio_addr][i] = NRIO_D12_DATA;
+      nrio_d12_clear_buffer();
+
+      // Signal end of transfer
+      _dcd.buffer_length[nrio_addr] -= total_left_to_read;
+    } else { /* NRIO_D12_SELECT_EP_EMPTY */
+      if (total_left_to_read)
+        return false;
+    }
+
+    if (bytes_in_buffer < NRIO_D12_MAX_PACKET_SIZE(nrio_addr) || !_dcd.buffer_length[nrio_addr]) {
+      _dcd.buffer[nrio_addr] = (void*) DCD_BUFFER_NONE;
+      dcd_event_xfer_complete(0, ep_addr, _dcd.buffer_total[nrio_addr], XFER_RESULT_SUCCESS, true);
+    } else {
+      _dcd.buffer[nrio_addr] += total_left_to_read;
+      
+      if (nrio_addr >= 4) {
+        uint8_t status = nrio_d12_read_endpoint_status(nrio_addr);
+        if (status & (NRIO_D12_STATUS_BUF0_FULL | NRIO_D12_STATUS_BUF1_FULL))
+          goto d12_read_next_buffer;
+      }
+    }
+  } else {
+    // Handle Device->Host transfers
+    nrio_d12_tx_packet(nrio_addr, ep_addr, true);
+  }
+
+  return true;
+}
+
 
 TU_ATTR_FAST_FUNC
 void dcd_int_handler (uint8_t rhport) {
@@ -457,68 +497,112 @@ void dcd_int_handler (uint8_t rhport) {
   if (!_dcd.irq_enabled)
     return;
 #endif
-
-  // EPxTX/EPxRX interrupt flags.
-  uint32_t xfers = 0;
   uint32_t _setup_packet[2];
 
-  uint16_t mask;
-  mask = NRIO_INT_STL;
-  NRIO_INT_STL = mask;
-  if (mask) {
-    if (mask & NRIO_INTL_BRESET) {
-      NRIO_INT_STL = 0xFFFF;
-      NRIO_INT_STH = 0xFFFF;
-      dcd_bus_init();
-      dcd_event_bus_reset(0, TUSB_SPEED_HIGH, true);
-      return;
-    } else {
-      xfers |= (mask >> 10);
+  if (_dcd.type == NRIO_TYPE_D14) {
+    // EPxTX/EPxRX interrupt flags.
+    uint32_t xfers = 0;
 
-      if (mask & NRIO_INTL_SOF) {
-        dcd_event_sof(0, NRIO_FRN, true);
+    uint16_t mask;
+    mask = NRIO_D14_INT_STL;
+    NRIO_D14_INT_STL = mask;
+    if (mask) {
+      if (mask & NRIO_D14_INTL_BRESET) {
+        NRIO_D14_INT_STL = 0xFFFF;
+        NRIO_D14_INT_STH = 0xFFFF;
+        nrio_d14_bus_init();
+        dcd_event_bus_reset(0, TUSB_SPEED_HIGH, true);
+        return;
+      } else {
+        xfers |= (mask >> 10);
+
+        if (mask & NRIO_D14_INTL_SOF) {
+          dcd_event_sof(0, NRIO_D14_FRN, true);
+        }
+        if (mask & NRIO_D14_INTL_SUSP) {
+          NRIO_D14_MODE &= ~NRIO_D14_MODE_CLKAON;
+          dcd_event_bus_signal(0, DCD_EVENT_SUSPEND, true);
+        }
+        if (mask & NRIO_D14_INTL_RESUME) {
+          NRIO_D14_MODE |= NRIO_D14_MODE_CLKAON;
+          dcd_event_bus_signal(0, DCD_EVENT_RESUME, true);
+          NRIO_D14_UNLOCK = NRIO_D14_UNLOCK_CODE;
+        }
+        if (mask & NRIO_D14_INTL_EP0SETUP) {
+          NRIO_D14_EP_IDX = NRIO_D14_EP_IDX_EP0_SETUP;
+          _setup_packet[0] = NRIO_D14_EP_DATA32;
+          _setup_packet[1] = NRIO_D14_EP_DATA32;
+          dcd_event_setup_received(0, (uint8_t*) _setup_packet, true);
+        }
       }
-      if (mask & NRIO_INTL_SUSP) {
-        NRIO_MODE &= ~NRIO_MODE_CLKAON;
-        dcd_event_bus_signal(0, DCD_EVENT_SUSPEND, true);
+    }
+
+    mask = NRIO_D14_INT_STH;
+    NRIO_D14_INT_STH = mask;
+    xfers |= (mask << 6) & 0xFFC0;
+
+    xfers |= _dcd.pending_xfers;
+    // Handle TX/RX interrupts.
+    while (xfers) {
+      uint32_t index = __builtin_clz(xfers) ^ 0x1F;
+      if (nrio_d14_xfer_handle(index, tu_edpt_from_nrio_idx(index))) {
+        _dcd.pending_xfers &= ~(1 << index);
+      } else {
+        _dcd.pending_xfers |= (1 << index);
       }
-      if (mask & NRIO_INTL_RESUME) {
-        NRIO_MODE |= NRIO_MODE_CLKAON;
-        dcd_event_bus_signal(0, DCD_EVENT_RESUME, true);
-        NRIO_UNLOCK = NRIO_UNLOCK_CODE;
-      }
-      if (mask & NRIO_INTL_EP0SETUP) {
-        NRIO_EP_IDX = NRIO_EP_IDX_EP0_SETUP;
-        _setup_packet[0] = NRIO_EP_DATA32;
-        _setup_packet[1] = NRIO_EP_DATA32;
+      xfers &= ~(1 << index);
+    }
+  } else { /* NRIO_TYPE_D12 */
+    uint16_t mask = nrio_d12_read_int();
+
+    if (mask & NRIO_D12_INT_BUS_RESET) {
+      nrio_d12_bus_init();
+      dcd_event_bus_reset(0, TUSB_SPEED_FULL, true);
+    }
+    if (mask & NRIO_D12_INT_SUSPEND_CHANGE) {
+      dcd_event_bus_signal(0, DCD_EVENT_SUSPEND, true);
+    }
+
+    // Handle endpoint events
+    uint32_t xfers = mask & 0x3F;
+    xfers |= _dcd.pending_xfers;
+    while (xfers) {
+      uint32_t index = __builtin_clz(xfers) ^ 0x1F;
+      mask = nrio_d12_read_endpoint_t_status(index);
+#if 0
+      if (mask & NRIO_D12_T_ERROR_MASK) {
+        TU_LOG(1, "DCD EP %02X Error %X\n", (int) tu_edpt_from_nrio_idx(index), (int) ((mask >> 1) & 0xF)); */
+#endif
+      if (mask & NRIO_D12_T_STATUS_SETUP) {
+        nrio_d12_select_endpoint(index);
+        nrio_d12_rx_bytes(_setup_packet, 8);
+        nrio_d12_acknowledge_setup();
+        nrio_d12_clear_buffer();
+        // 11.3.10 - acknowledge SETUP on IN buffer too
+        nrio_d12_select_endpoint(index | 1);
+        nrio_d12_acknowledge_setup();
+        nrio_d12_clear_buffer();
+
         dcd_event_setup_received(0, (uint8_t*) _setup_packet, true);
+      } else {
+        if (nrio_d12_xfer_handle(index, tu_edpt_from_nrio_idx(index))) {
+          _dcd.pending_xfers &= ~(1 << index);
+        } else {
+          _dcd.pending_xfers |= (1 << index);
+        }
       }
+      xfers &= ~(1 << index);
     }
-  }
-
-  mask = NRIO_INT_STH;
-  NRIO_INT_STH = mask;
-  xfers |= (mask << 6) & 0xFFC0;
-
-  // Apply an additional, polling-centric set of transfer flags.
-  // As the NRIO does not have proper interrupts, ensuring reliable response
-  // to TX/RX events is a bit of a challenge.
-  xfers |= _dcd.xfer_mask;
-  // Handle TX/RX interrupts.
-  while (xfers) {
-    uint32_t index = __builtin_clz(xfers) ^ 0x1F;
-    if (dcd_xfer_handle(index, tu_edpt_from_nrio_idx(index))) {
-      _dcd.xfer_mask &= ~(1 << index);
-    } else {
-      _dcd.xfer_mask |= (1 << index);
-    }
-    xfers &= ~(1 << index);
   }
 }
 
 // Receive Set Address request, mcu port must also include status IN response
 void dcd_set_address (uint8_t rhport, uint8_t dev_addr) {
-  NRIO_DEVEN = NRIO_DEVEN_ENABLE | NRIO_DEVEN_ADDR(dev_addr & 0x7F);
+  if (_dcd.type == NRIO_TYPE_D14) {
+    NRIO_D14_DEVEN = NRIO_D14_DEVEN_ENABLE | NRIO_D14_DEVEN_ADDR(dev_addr);
+  } else {
+    nrio_d12_set_address(NRIO_D12_ADDRESS_ENABLE | NRIO_D12_ADDRESS(dev_addr));
+  }
   dcd_edpt_xfer(rhport, tu_edpt_addr(0, TUSB_DIR_IN), NULL, 0);
 }
 
@@ -526,44 +610,67 @@ void dcd_set_address (uint8_t rhport, uint8_t dev_addr) {
 void dcd_remote_wakeup (uint8_t rhport) {
   (void) rhport;
 
-  NRIO_MODE |= NRIO_MODE_SNDRSU;
-  NRIO_MODE &= ~NRIO_MODE_SNDRSU;
+  if (_dcd.type == NRIO_TYPE_D14) {
+    NRIO_D14_MODE |= NRIO_D14_MODE_SNDRSU;
+    NRIO_D14_MODE &= ~NRIO_D14_MODE_SNDRSU;
+  } else { /* NRIO_TYPE_D12 */
+    nrio_d12_send_resume();
+  }
 }
 
 // Connect by enabling internal pull-up resistor on D+/D-
 void dcd_connect(uint8_t rhport) {
   (void) rhport;
-  NRIO_MODE |= NRIO_MODE_SOFTCT;
+  if (_dcd.type == NRIO_TYPE_D14) {
+    NRIO_D14_MODE |= NRIO_D14_MODE_SOFTCT;
+  } else { /* NRIO_TYPE_D12 */
+    nrio_d12_set_mode(_dcd.d12_mode | NRIO_D12_MODE_CFG_SOFTCT);
+  }
 }
 
 // Disconnect by disabling internal pull-up resistor on D+/D-
 void dcd_disconnect(uint8_t rhport) {
   (void) rhport;
-  NRIO_MODE &= ~NRIO_MODE_SOFTCT;
+  if (_dcd.type == NRIO_TYPE_D14) {
+    NRIO_D14_MODE &= ~NRIO_D14_MODE_SOFTCT;
+  } else { /* NRIO_TYPE_D12 */
+    nrio_d12_set_mode(_dcd.d12_mode & ~NRIO_D12_MODE_CFG_SOFTCT);
+  }
+}
+
+uint8_t dcd_edpt0_get_size(void) {
+  return _dcd.type == NRIO_TYPE_D12 ? 16 : 64;
 }
 
 void dcd_sof_enable(uint8_t rhport, bool en) {
   (void) rhport;
   (void) en;
 
-  if (en) {
-    NRIO_INT_ENL |= NRIO_INTL_SOF;
-  } else {
-    NRIO_INT_ENL &= ~NRIO_INTL_SOF;
+  if (_dcd.type == NRIO_TYPE_D14) {
+    if (en) {
+      NRIO_D14_INT_ENL |= NRIO_D14_INTL_SOF;
+    } else {
+      NRIO_D14_INT_ENL &= ~NRIO_D14_INTL_SOF;
+    }
+  } else { /* NRIO_TYPE_D12 */
+    // TODO D12
   }
 }
 
 #if CFG_TUD_TEST_MODE
 void dcd_enter_test_mode(uint8_t rhport, tusb_feature_test_mode_t test_selector) {
+  if (_dcd.type != NRIO_TYPE_D14)
+    return;
+
   switch (test_selector) {
     case TUSB_FEATURE_TEST_J:
-      NRIO_TEST = NRIO_TEST_JSTATE;
+      NRIO_D14_TEST = NRIO_D14_TEST_JSTATE;
       break;
     case TUSB_FEATURE_TEST_K:
-      NRIO_TEST = NRIO_TEST_KSTATE;
+      NRIO_D14_TEST = NRIO_D14_TEST_KSTATE;
       break;
     case TUSB_FEATURE_TEST_SE0_NAK:
-      NRIO_TEST = NRIO_TEST_SE0_NAK;
+      NRIO_D14_TEST = NRIO_D14_TEST_SE0_NAK;
       break;
   }
 }
@@ -578,15 +685,42 @@ bool dcd_edpt_open (uint8_t rhport, tusb_desc_endpoint_t const * ep_desc) {
   (void) rhport;
   uint32_t idx = tu_edpt_nrio_idx(ep_desc->bEndpointAddress);
 
-  NRIO_EP_IDX = idx;
-  // Enable double-buffering for Host->Device transfers.
-  NRIO_EP_TYPE = ep_desc->bmAttributes.xfer | NRIO_EP_TYPE_NOEMPKT
-    | (tu_edpt_dir(ep_desc->bEndpointAddress) == TUSB_DIR_OUT ? NRIO_EP_TYPE_DBLBUF : NRIO_EP_TYPE_DBLBUF);
-  NRIO_EP_PKT = ep_desc->wMaxPacketSize;
-  NRIO_EP_CFG = NRIO_EP_CFG_CLBUF;
-  NRIO_EP_IDX = idx;
-  NRIO_EP_CFG = NRIO_EP_CFG_CLBUF;
-  NRIO_EP_TYPE |= NRIO_EP_TYPE_ENABLE;
+  if (_dcd.type == NRIO_TYPE_D14) {
+    NRIO_D14_EP_IDX = idx;
+    // Enable double-buffering for Host->Device transfers.
+    NRIO_D14_EP_TYPE = ep_desc->bmAttributes.xfer | NRIO_D14_EP_TYPE_NOEMPKT
+      | (tu_edpt_dir(ep_desc->bEndpointAddress) == TUSB_DIR_OUT ? NRIO_D14_EP_TYPE_DBLBUF : NRIO_D14_EP_TYPE_DBLBUF);
+    NRIO_D14_EP_PKT = ep_desc->wMaxPacketSize;
+    NRIO_D14_EP_CFG = NRIO_D14_EP_CFG_CLBUF;
+    NRIO_D14_EP_IDX = idx;
+    NRIO_D14_EP_CFG = NRIO_D14_EP_CFG_CLBUF;
+    NRIO_D14_EP_TYPE |= NRIO_D14_EP_TYPE_ENABLE;
+  } else { /* NRIO_TYPE_D12 */
+    uint32_t num = tu_edpt_number(ep_desc->bEndpointAddress);
+
+    switch (ep_desc->bmAttributes.xfer) {
+    case TUSB_XFER_CONTROL:
+      if (num != 0)
+        return false;
+      break;
+    case TUSB_XFER_ISOCHRONOUS:
+      if (num != 2)
+        return false;
+      nrio_d12_set_mode(_dcd.d12_mode | NRIO_D12_MODE_CFG_ISO_IO);
+      break;
+    case TUSB_XFER_BULK:
+    case TUSB_XFER_INTERRUPT:
+      if (num == 2)
+        nrio_d12_set_mode(_dcd.d12_mode & ~NRIO_D12_MODE_CFG_ISO_IO);
+      else if (num != 1)
+        return false;
+      break;
+    }
+
+    if (num == 2)
+      nrio_d12_set_endpoint(1);
+    nrio_d12_set_endpoint_status(idx, 0);
+  }
 
   return true;
 }
@@ -594,9 +728,13 @@ bool dcd_edpt_open (uint8_t rhport, tusb_desc_endpoint_t const * ep_desc) {
 void dcd_edpt_close_all (uint8_t rhport) {
   (void) rhport;
 
-  for (int i = 15; i >= 2; i--) {
-    NRIO_EP_IDX = i;
-    NRIO_EP_TYPE = 0;
+  if (_dcd.type == NRIO_TYPE_D14) {
+    for (int i = 15; i >= 2; i--) {
+      NRIO_D14_EP_IDX = i;
+      NRIO_D14_EP_TYPE = 0;
+    }
+  } else { /* NRIO_TYPE_D12 */
+    nrio_d12_set_endpoint(0);
   }
 }
 
@@ -607,40 +745,34 @@ bool dcd_edpt_xfer (uint8_t rhport, uint8_t ep_addr, uint8_t * buffer, uint16_t 
   (void) buffer;
   (void) total_bytes;
 
-#ifdef ARM9
-#ifndef NRIO_SUPPORT_LARGE_TRANSFERS
-  sassert(total_bytes <= 512, "USBD Xfer too large: %d > 512", total_bytes);
-#endif
-#endif
-
   uint32_t idx = tu_edpt_nrio_idx(ep_addr);
 
-  if (_dcd.buffer_length[idx])
+  if (((uintptr_t) _dcd.buffer[idx]) != DCD_BUFFER_NONE)
     return false;
 
-  if (!total_bytes) {
-    // Handle zero-length packets
-    NRIO_EP_CFG = NRIO_EP_CFG_STATUS;
-    dcd_event_xfer_complete(0, ep_addr, 0, XFER_RESULT_SUCCESS, false);
-  } else {
-    int oldIME = enterCriticalSection();
-    _dcd.buffer[idx] = (uint8_t*) buffer;
-    _dcd.buffer_length[idx] = total_bytes;
-#ifdef NRIO_SUPPORT_LARGE_TRANSFERS
-    _dcd.buffer_total[idx] = total_bytes;
+  int oldIME = enterCriticalSection();
+  _dcd.buffer[idx] = (uint8_t*) buffer;
+  _dcd.buffer_length[idx] = total_bytes;
+  _dcd.buffer_total[idx] = total_bytes;
+  leaveCriticalSection(oldIME);
+  
+  if (_dcd.type == NRIO_TYPE_D14) {
+    if (!total_bytes) {
+      // Handle zero-length packets
+      NRIO_D14_EP_CFG = NRIO_D14_EP_CFG_STATUS;
+    } else {
+      if (tu_edpt_dir(ep_addr) == TUSB_DIR_IN) {
+        // Device to Host - queue data on FIFO, wait for TX interrupt
+#ifdef CFG_TUD_NRIO_DMA_CHANNEL
+        DC_FlushRange(buffer, total_bytes);
 #endif
-    leaveCriticalSection(oldIME);
-    
+        nrio_d14_tx_packet(idx, ep_addr, false);
+      }
+    }
+  } else { /* NRIO_TYPE_D12 */
     if (tu_edpt_dir(ep_addr) == TUSB_DIR_IN) {
       // Device to Host - queue data on FIFO, wait for TX interrupt
-#ifdef CFG_TUD_NRIO_DMA_CHANNEL
-      DC_FlushRange(buffer, total_bytes);
-#endif
-      dcd_nrio_tx_packet(idx, ep_addr, false);
-    } else {
-      // Host to Device - poll BUFLEN, then write to buffer
-      // RX already configured above
-      // _dcd.xfer_mask |= (1 << idx);
+      nrio_d12_tx_packet(idx, ep_addr, false);
     }
   }
 
@@ -662,20 +794,28 @@ bool dcd_edpt_xfer (uint8_t rhport, uint8_t ep_addr, uint8_t * buffer, uint16_t 
 void dcd_edpt_stall (uint8_t rhport, uint8_t ep_addr) {
   (void) rhport;
 
-  NRIO_EP_IDX = tu_edpt_nrio_idx(ep_addr);
-  NRIO_EP_CFG |= NRIO_EP_CFG_STALL;
+  if (_dcd.type == NRIO_TYPE_D14) {
+    NRIO_D14_EP_IDX = tu_edpt_nrio_idx(ep_addr);
+    NRIO_D14_EP_CFG = NRIO_D14_EP_CFG_STALL;
+  } else { /* NRIO_TYPE_D12 */
+    nrio_d12_set_endpoint_status(tu_edpt_nrio_idx(ep_addr), NRIO_D12_SET_STATUS_STALL);
+  }
 }
 
 // clear stall, data toggle is also reset to DATA0
 void dcd_edpt_clear_stall (uint8_t rhport, uint8_t ep_addr) {
   (void) rhport;
 
-  NRIO_EP_IDX = tu_edpt_nrio_idx(ep_addr);
-  NRIO_EP_CFG &= ~NRIO_EP_CFG_STALL;
+  if (_dcd.type == NRIO_TYPE_D14) {
+    NRIO_D14_EP_IDX = tu_edpt_nrio_idx(ep_addr);
+    NRIO_D14_EP_CFG = 0;
 
-  // Reset data toggle bit
-  NRIO_EP_TYPE &= ~NRIO_EP_TYPE_ENABLE;
-  NRIO_EP_TYPE |= NRIO_EP_TYPE_ENABLE;
+    // Reset data toggle bit
+    NRIO_D14_EP_TYPE &= ~NRIO_D14_EP_TYPE_ENABLE;
+    NRIO_D14_EP_TYPE |= NRIO_D14_EP_TYPE_ENABLE;
+  } else { /* NRIO_TYPE_D12 */
+    nrio_d12_set_endpoint_status(tu_edpt_nrio_idx(ep_addr), 0);
+  }
 }
 
 #endif

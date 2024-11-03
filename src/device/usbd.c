@@ -112,6 +112,10 @@ TU_ATTR_WEAK bool dcd_dcache_clean_invalidate(const void* addr, uint32_t data_si
   return true;
 }
 
+TU_ATTR_WEAK uint8_t dcd_edpt0_get_size(void) {
+  return CFG_TUD_ENDPOINT0_SIZE;
+}
+
 //--------------------------------------------------------------------+
 // Device Data
 //--------------------------------------------------------------------+
@@ -446,6 +450,10 @@ bool tud_disconnect(void) {
 bool tud_connect(void) {
   dcd_connect(_usbd_rhport);
   return true;
+}
+
+uint8_t tud_edpt0_get_size(void) {
+  return dcd_edpt0_get_size();
 }
 
 void tud_sof_cb_enable(bool en) {
@@ -1072,6 +1080,7 @@ static bool process_get_descriptor(uint8_t rhport, tusb_control_request_t const 
 {
   tusb_desc_type_t const desc_type = (tusb_desc_type_t) tu_u16_high(p_request->wValue);
   uint8_t const desc_index = tu_u16_low( p_request->wValue );
+  uint16_t const ep0_size = dcd_edpt0_get_size();
 
   switch(desc_type)
   {
@@ -1083,14 +1092,14 @@ static bool process_get_descriptor(uint8_t rhport, tusb_control_request_t const 
 
       // Only response with exactly 1 Packet if: not addressed and host requested more data than device descriptor has.
       // This only happens with the very first get device descriptor and EP0 size = 8 or 16.
-      if ((CFG_TUD_ENDPOINT0_SIZE < sizeof(tusb_desc_device_t)) && !_usbd_dev.addressed &&
+      if ((ep0_size < sizeof(tusb_desc_device_t)) && !_usbd_dev.addressed &&
           ((tusb_control_request_t const*) p_request)->wLength > sizeof(tusb_desc_device_t)) {
         // Hack here: we modify the request length to prevent usbd_control response with zlp
         // since we are responding with 1 packet & less data than wLength.
         tusb_control_request_t mod_request = *p_request;
-        mod_request.wLength = CFG_TUD_ENDPOINT0_SIZE;
+        mod_request.wLength = ep0_size;
 
-        return tud_control_xfer(rhport, &mod_request, desc_device, CFG_TUD_ENDPOINT0_SIZE);
+        return tud_control_xfer(rhport, &mod_request, desc_device, ep0_size);
       }else {
         return tud_control_xfer(rhport, p_request, desc_device, sizeof(tusb_desc_device_t));
       }
