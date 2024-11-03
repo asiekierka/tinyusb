@@ -68,7 +68,7 @@
 #define NRIO_TYPE_D12 2
 
 #define NRIO_D14_MAX_PACKET_SIZE 512
-#define NRIO_D12_MAX_PACKET_SIZE(nrio_addr) (((nrio_addr) < 4) ? 16 : 64)
+#define NRIO_D12_MAX_PACKET_SIZE(index) (((index) < 4) ? 16 : 64)
 
 #define NRIO_D12_MODE_CLK_DEFAULT (NRIO_D12_MODE_CLK_INITIAL | NRIO_D12_MODE_CLK_DIV(8))
 
@@ -400,20 +400,20 @@ void dcd_int_disable (uint8_t rhport) {
 /**
  * @brief Attempt handling a TX/RX event.
  * 
- * @param nrio_addr NRIO-format address.
+ * @param index NRIO-format address.
  * @param ep_addr TinyUSB-format address.
  * @param in_isr True if executed in IRQ handler.
  * @return bool Whether or not the event was processed.
  */
 TU_ATTR_FAST_FUNC
-static bool nrio_d14_xfer_handle (uint32_t nrio_addr, uint32_t ep_addr) {
-  if (((uintptr_t) _dcd.buffer[nrio_addr]) == DCD_BUFFER_NONE)
+static bool nrio_d14_xfer_handle (uint32_t index, uint32_t ep_addr) {
+  if (((uintptr_t) _dcd.buffer[index]) == DCD_BUFFER_NONE)
     return false;
 
   if (tu_edpt_dir(ep_addr) == TUSB_DIR_OUT) {
     // Handle Host->Device transfers
-    uint16_t total_left_to_read = _dcd.buffer_length[nrio_addr];
-    NRIO_D14_EP_IDX = nrio_addr;
+    uint16_t total_left_to_read = _dcd.buffer_length[index];
+    NRIO_D14_EP_IDX = index;
     uint16_t bytes_in_buffer = NRIO_D14_EP_BUFLEN;
     if (total_left_to_read && !bytes_in_buffer)
       return false;
@@ -421,37 +421,43 @@ static bool nrio_d14_xfer_handle (uint32_t nrio_addr, uint32_t ep_addr) {
       total_left_to_read = bytes_in_buffer;
 
     // Copy data from NRIO to buffer
-    nrio_d14_rx_bytes(_dcd.buffer[nrio_addr], total_left_to_read);
+    nrio_d14_rx_bytes(_dcd.buffer[index], total_left_to_read);
 
     // Signal end of transfer
-    _dcd.buffer_length[nrio_addr] -= total_left_to_read;
-    if (bytes_in_buffer < NRIO_D14_MAX_PACKET_SIZE || !_dcd.buffer_length[nrio_addr]) {
-      _dcd.buffer[nrio_addr] = (void*) DCD_BUFFER_NONE;
-      dcd_event_xfer_complete(0, ep_addr, _dcd.buffer_total[nrio_addr], XFER_RESULT_SUCCESS, true);
+    _dcd.buffer_length[index] -= total_left_to_read;
+    if (bytes_in_buffer < NRIO_D14_MAX_PACKET_SIZE || !_dcd.buffer_length[index]) {
+      _dcd.buffer[index] = (void*) DCD_BUFFER_NONE;
+      dcd_event_xfer_complete(0, ep_addr, _dcd.buffer_total[index], XFER_RESULT_SUCCESS, true);
     } else {
-      _dcd.buffer[nrio_addr] += total_left_to_read;
+      _dcd.buffer[index] += total_left_to_read;
     }
   } else {
     // Handle Device->Host transfers
-    nrio_d14_tx_packet(nrio_addr, ep_addr, true);
+    nrio_d14_tx_packet(index, ep_addr, true);
   }
 
   return true;
 }
 
 TU_ATTR_FAST_FUNC
-static bool nrio_d12_xfer_handle (uint32_t nrio_addr, uint32_t ep_addr) {
-  if (((uintptr_t) _dcd.buffer[nrio_addr]) == DCD_BUFFER_NONE)
+static bool nrio_d12_xfer_handle (uint32_t index, uint32_t ep_addr) {
+  if (((uintptr_t) _dcd.buffer[index]) == DCD_BUFFER_NONE)
     return false;
 
   if (tu_edpt_dir(ep_addr) == TUSB_DIR_OUT) {
     // Handle Host->Device transfers
 d12_read_next_buffer:
-    uint16_t total_left_to_read = _dcd.buffer_length[nrio_addr];
-    uint8_t status = nrio_d12_select_query_endpoint(nrio_addr);
+    uint16_t total_left_to_read = _dcd.buffer_length[index];
+    uint8_t query = nrio_d12_select_query_endpoint(index);
     uint8_t bytes_in_buffer = 0;
 
-    if (status & NRIO_D12_SELECT_EP_FULL) {
+    bool two_buffers = false;
+    if (index >= 4) {
+      uint8_t status = nrio_d12_read_endpoint_status(index);
+      two_buffers = (status & (NRIO_D12_STATUS_BUF0_FULL | NRIO_D12_STATUS_BUF1_FULL)) == (NRIO_D12_STATUS_BUF0_FULL | NRIO_D12_STATUS_BUF1_FULL);
+    }
+
+    if (query & NRIO_D12_SELECT_EP_FULL) {
       NRIO_D12_CMD = NRIO_D12_CMD_READ_BUFFER;
       NRIO_D12_DATA;
       bytes_in_buffer = NRIO_D12_DATA;
@@ -460,31 +466,27 @@ d12_read_next_buffer:
 
       // Copy data from NRIO to buffer
       for (int i = 0; i < total_left_to_read; i++)
-        _dcd.buffer[nrio_addr][i] = NRIO_D12_DATA;
+        _dcd.buffer[index][i] = NRIO_D12_DATA;
       nrio_d12_clear_buffer();
 
       // Signal end of transfer
-      _dcd.buffer_length[nrio_addr] -= total_left_to_read;
+      _dcd.buffer_length[index] -= total_left_to_read;
     } else { /* NRIO_D12_SELECT_EP_EMPTY */
       if (total_left_to_read)
         return false;
     }
 
-    if (bytes_in_buffer < NRIO_D12_MAX_PACKET_SIZE(nrio_addr) || !_dcd.buffer_length[nrio_addr]) {
-      _dcd.buffer[nrio_addr] = (void*) DCD_BUFFER_NONE;
-      dcd_event_xfer_complete(0, ep_addr, _dcd.buffer_total[nrio_addr], XFER_RESULT_SUCCESS, true);
+    if (bytes_in_buffer < NRIO_D12_MAX_PACKET_SIZE(index) || !_dcd.buffer_length[index]) {
+      _dcd.buffer[index] = (void*) DCD_BUFFER_NONE;
+      dcd_event_xfer_complete(0, ep_addr, _dcd.buffer_total[index], XFER_RESULT_SUCCESS, true);
     } else {
-      _dcd.buffer[nrio_addr] += total_left_to_read;
-      
-      if (nrio_addr >= 4) {
-        uint8_t status = nrio_d12_read_endpoint_status(nrio_addr);
-        if (status & (NRIO_D12_STATUS_BUF0_FULL | NRIO_D12_STATUS_BUF1_FULL))
-          goto d12_read_next_buffer;
-      }
+      _dcd.buffer[index] += total_left_to_read;
+      if (two_buffers)
+        goto d12_read_next_buffer;
     }
   } else {
     // Handle Device->Host transfers
-    nrio_d12_tx_packet(nrio_addr, ep_addr, true);
+    nrio_d12_tx_packet(index, ep_addr, true);
   }
 
   return true;
@@ -745,15 +747,15 @@ bool dcd_edpt_xfer (uint8_t rhport, uint8_t ep_addr, uint8_t * buffer, uint16_t 
   (void) buffer;
   (void) total_bytes;
 
-  uint32_t idx = tu_edpt_nrio_idx(ep_addr);
+  uint32_t index = tu_edpt_nrio_idx(ep_addr);
 
-  if (((uintptr_t) _dcd.buffer[idx]) != DCD_BUFFER_NONE)
+  if (((uintptr_t) _dcd.buffer[index]) != DCD_BUFFER_NONE)
     return false;
 
   int oldIME = enterCriticalSection();
-  _dcd.buffer[idx] = (uint8_t*) buffer;
-  _dcd.buffer_length[idx] = total_bytes;
-  _dcd.buffer_total[idx] = total_bytes;
+  _dcd.buffer[index] = (uint8_t*) buffer;
+  _dcd.buffer_length[index] = total_bytes;
+  _dcd.buffer_total[index] = total_bytes;
   leaveCriticalSection(oldIME);
   
   if (_dcd.type == NRIO_TYPE_D14) {
@@ -766,13 +768,13 @@ bool dcd_edpt_xfer (uint8_t rhport, uint8_t ep_addr, uint8_t * buffer, uint16_t 
 #ifdef CFG_TUD_NRIO_DMA_CHANNEL
         DC_FlushRange(buffer, total_bytes);
 #endif
-        nrio_d14_tx_packet(idx, ep_addr, false);
+        nrio_d14_tx_packet(index, ep_addr, false);
       }
     }
   } else { /* NRIO_TYPE_D12 */
     if (tu_edpt_dir(ep_addr) == TUSB_DIR_IN) {
       // Device to Host - queue data on FIFO, wait for TX interrupt
-      nrio_d12_tx_packet(idx, ep_addr, false);
+      nrio_d12_tx_packet(index, ep_addr, false);
     }
   }
 
