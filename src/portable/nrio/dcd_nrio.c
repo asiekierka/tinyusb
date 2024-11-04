@@ -58,12 +58,6 @@
 // Convert an NRIO index to a TinyUSB ep_addr.
 #define tu_edpt_from_nrio_idx(e) ((((e) << 7) & 0x80) | ((e) >> 1))
 
-// Default interrupt enable masks.
-// SOF is enabled on demand; PSOF and DMA are not used.
-// TODO: Enable EPxTX/EPxRX on demand.
-#define NRIO_D14_INTL_DEFAULT (NRIO_D14_INTL_ALL & ~(NRIO_D14_INTL_DMA | NRIO_D14_INTL_PSOF | NRIO_D14_INTL_SOF))
-#define NRIO_D14_INTH_DEFAULT NRIO_D14_INTH_ALL
-
 #define NRIO_TYPE_D14 1
 #define NRIO_TYPE_D12 2
 
@@ -77,6 +71,7 @@
 
 // Device driver state.
 static struct {
+  uint16_t chip_id;
   uint8_t *buffer[CFG_TUD_ENDPPOINT_MAX * 2];
   uint16_t buffer_length[CFG_TUD_ENDPPOINT_MAX * 2];
   uint16_t buffer_total[CFG_TUD_ENDPPOINT_MAX * 2];
@@ -188,7 +183,6 @@ static void nrio_d14_tx_packet(uint32_t idx, uint32_t ep_addr, bool after_tx) {
 #ifdef CFG_TUD_NRIO_DMA_CHANNEL
   while (DMA_CR(CFG_TUD_NRIO_DMA_CHANNEL) & DMA_BUSY);
 
-  //dmaSetParams(CFG_TUD_NRIO_DMA_CHANNEL, _dcd.buffer[idx], (void*) &NRIO_D14_EP_DATA, DMA_COPY_HALFWORDS | DMA_SRC_INC | DMA_DST_FIX | ((bytes_to_tx + 1) >> 1));
   dmaSetParams(CFG_TUD_NRIO_DMA_CHANNEL, _dcd.buffer[idx], (void*) &NRIO_D14_EP_DATA, DMA_COPY_WORDS | DMA_SRC_INC | DMA_DST_FIX | ((bytes_to_tx + 3) >> 2));
 #else
   nrio_d14_tx_bytes(_dcd.buffer[idx], bytes_to_tx);
@@ -260,8 +254,11 @@ static void nrio_d14_bus_init (void) {
   NRIO_D14_INT_CFG = NRIO_D14_INT_CFG_CDBGMOD(1) | NRIO_D14_INT_CFG_DDBGMODIN(1) | NRIO_D14_INT_CFG_DDBGMODOUT(1)
     | NRIO_D14_INT_CFG_SIG_LEVEL | NRIO_D14_INT_CFG_POL_HIGH;
 
-  NRIO_D14_INT_ENL = NRIO_D14_INTL_DEFAULT;
-  NRIO_D14_INT_ENH = NRIO_D14_INTH_DEFAULT;
+  // Default interrupt enable masks.
+  // SOF is enabled on demand; PSOF and DMA are not used.
+  NRIO_D14_INT_ENL = NRIO_D14_INTL_BRESET | NRIO_D14_INTL_SUSP | NRIO_D14_INTL_RESUME
+    | NRIO_D14_INTL_EP0SETUP | NRIO_D14_INTL_EP0TX | NRIO_D14_INTL_EP0RX;
+  NRIO_D14_INT_ENH = 0;
 
   // Configure control endpoints
   dcd_edpt_open(0, &ep0OUT_desc);
@@ -282,7 +279,7 @@ static void nrio_d14_reset (void) {
   NRIO_D14_MODE = 0;
   swiDelay(8378); // 1ms
 
-  NRIO_D14_MODE = NRIO_D14_MODE_GLINTENA | NRIO_D14_MODE_CLKAON;
+  NRIO_D14_MODE = NRIO_D14_MODE_GLINTENA;
 }
 
 uint32_t dcd_read_chip_id (void) {
@@ -311,6 +308,7 @@ bool dcd_init(uint8_t rhport, const tusb_rhport_init_t* rh_init) {
   uint32_t d14_chip_id = ((NRIO_D14_CHIP_IDH << 16) | NRIO_D14_CHIP_IDL) & 0xFFFFFF;
   if (d14_chip_id >= 0x158100 && d14_chip_id < 0x158400) {
     _dcd.type = NRIO_TYPE_D14;
+    _dcd.chip_id = d14_chip_id >> 8;
     TU_LOG(3, "Detected D14 chip (%06X)\n", (int) d14_chip_id);
   } else {
     // The D12 supports a maximum readout speed of 2 MHz.
@@ -321,6 +319,7 @@ bool dcd_init(uint8_t rhport, const tusb_rhport_init_t* rh_init) {
     uint16_t chip_id = nrio_d12_read_chip_id();
     if (chip_id != 0x0000 && chip_id != 0xFFFF) {
       _dcd.type = NRIO_TYPE_D12;
+      _dcd.chip_id = chip_id;
 
       TU_LOG(3, "Detected D12 chip (%04X)\n", chip_id);
     } else {
@@ -531,11 +530,9 @@ void dcd_d14_int_handler (void) {
         dcd_event_sof(0, NRIO_D14_FRN, true);
       }
       if (mask & NRIO_D14_INTL_SUSP) {
-        NRIO_D14_MODE &= ~NRIO_D14_MODE_CLKAON;
         dcd_event_bus_signal(0, DCD_EVENT_SUSPEND, true);
       }
       if (mask & NRIO_D14_INTL_RESUME) {
-        NRIO_D14_MODE |= NRIO_D14_MODE_CLKAON;
         dcd_event_bus_signal(0, DCD_EVENT_RESUME, true);
         NRIO_D14_UNLOCK = NRIO_D14_UNLOCK_CODE;
       }
@@ -709,6 +706,13 @@ bool dcd_edpt_open (uint8_t rhport, tusb_desc_endpoint_t const * ep_desc) {
   uint32_t idx = tu_edpt_nrio_idx(ep_desc->bEndpointAddress);
 
   if (_dcd.type == NRIO_TYPE_D14) {
+    // Enable EP interrupt
+    if (idx >= 6) {
+      NRIO_D14_INT_ENH |= (1 << (idx - 6));
+    } else if (idx >= 2) {
+      NRIO_D14_INT_ENL |= (1 << (10 + idx));
+    }
+
     NRIO_D14_EP_IDX = idx;
     // Enable double-buffering for Host->Device transfers.
     // TODO: Enable double-buffering for Device->Host transfers?
@@ -721,7 +725,7 @@ bool dcd_edpt_open (uint8_t rhport, tusb_desc_endpoint_t const * ep_desc) {
     NRIO_D14_EP_TYPE |= NRIO_D14_EP_TYPE_ENABLE;
   } else { /* NRIO_TYPE_D12 */
     uint32_t num = tu_edpt_number(ep_desc->bEndpointAddress);
-
+    
     switch (ep_desc->bmAttributes.xfer) {
     case TUSB_XFER_CONTROL:
       if (num != 0)
@@ -753,6 +757,11 @@ void dcd_edpt_close_all (uint8_t rhport) {
   (void) rhport;
 
   if (_dcd.type == NRIO_TYPE_D14) {
+    // Disable EP interrupts
+    NRIO_D14_INT_ENL &= 0x0FFF;
+    NRIO_D14_INT_ENH = 0;
+
+    // Disable EPs
     for (int i = 15; i >= 2; i--) {
       NRIO_D14_EP_IDX = i;
       NRIO_D14_EP_TYPE = 0;
@@ -771,8 +780,17 @@ bool dcd_edpt_xfer (uint8_t rhport, uint8_t ep_addr, uint8_t * buffer, uint16_t 
 
   uint32_t index = tu_edpt_nrio_idx(ep_addr);
 
+#ifdef DEBUG
   if (((uintptr_t) _dcd.buffer[index]) != DCD_BUFFER_NONE)
     return false;
+#endif
+
+  if (_dcd.chip_id >= 0x1582 && _dcd.type == NRIO_TYPE_D14 && !total_bytes) {
+    // ISP1582/83 do not emit an IRQ for status transfers.
+    NRIO_D14_EP_CFG = NRIO_D14_EP_CFG_STATUS;
+    dcd_event_xfer_complete(0, ep_addr, total_bytes, XFER_RESULT_SUCCESS, true);
+    return true;
+  }
 
   int oldIME = enterCriticalSection();
   _dcd.buffer[index] = (uint8_t*) buffer;
