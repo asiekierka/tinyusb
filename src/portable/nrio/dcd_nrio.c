@@ -69,6 +69,12 @@
 #define DCD_BUFFER_LAST_TX 0xFFFFFFFD
 #define DCD_BUFFER_NONE    0xFFFFFFFF
 
+#ifndef ARM9
+#ifndef REG_EXMEMCNT
+#define REG_EXMEMCNT REG_EXMEMSTAT
+#endif
+#endif
+
 // Device driver state.
 static struct {
   uint16_t chip_id;
@@ -298,8 +304,6 @@ bool dcd_init(uint8_t rhport, const tusb_rhport_init_t* rh_init) {
   // Configure GBA cartridge bus
 #ifdef ARM9
   sysSetCartOwner(BUS_OWNER_ARM9);
-#else
-  sysSetCartOwner(BUS_OWNER_ARM7);
 #endif
   REG_EXMEMCNT = (REG_EXMEMCNT & ~0x1F) | EXMEMCNT_ROM_TIME1_6_CYCLES
     | EXMEMCNT_ROM_TIME2_4_CYCLES | EXMEMCNT_SRAM_TIME_6_CYCLES;
@@ -339,7 +343,11 @@ bool dcd_init(uint8_t rhport, const tusb_rhport_init_t* rh_init) {
     _dcd.d12_mode = 0xFF;
     nrio_d12_set_mode(0);
     nrio_d12_set_dma(NRIO_D12_DMA_CFG_IRQ_PKT | NRIO_D12_DMA_CFG_IRQ_VALID);
+#if defined(ARM9) && defined(__BLOCKSDS__)
     for (int i = 0; i < 60; i++) cothread_yield_irq(IRQ_VBLANK);
+#else
+    for (int i = 0; i < 60; i++) swiWaitForVBlank();
+#endif
   }
   dcd_connect(rhport);
   return true;
