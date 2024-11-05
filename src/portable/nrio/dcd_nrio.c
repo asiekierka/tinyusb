@@ -447,7 +447,7 @@ static bool nrio_d14_xfer_handle (uint32_t index, uint32_t ep_addr) {
     _dcd.buffer_length[index] -= total_left_to_read;
     if (bytes_in_buffer < NRIO_D14_MAX_PACKET_SIZE || !_dcd.buffer_length[index]) {
       _dcd.buffer[index] = (void*) DCD_BUFFER_NONE;
-      dcd_event_xfer_complete(0, ep_addr, _dcd.buffer_total[index], XFER_RESULT_SUCCESS, true);
+      dcd_event_xfer_complete(0, ep_addr, _dcd.buffer_total[index] - _dcd.buffer_length[index], XFER_RESULT_SUCCESS, true);
     } else {
       _dcd.buffer[index] += total_left_to_read;
     }
@@ -498,7 +498,7 @@ d12_read_next_buffer:
 
     if (bytes_in_buffer < NRIO_D12_MAX_PACKET_SIZE(index) || !_dcd.buffer_length[index]) {
       _dcd.buffer[index] = (void*) DCD_BUFFER_NONE;
-      dcd_event_xfer_complete(0, ep_addr, _dcd.buffer_total[index], XFER_RESULT_SUCCESS, true);
+      dcd_event_xfer_complete(0, ep_addr, _dcd.buffer_total[index] - _dcd.buffer_length[index], XFER_RESULT_SUCCESS, true);
     } else {
       _dcd.buffer[index] += total_left_to_read;
       if (two_buffers) {
