@@ -342,6 +342,7 @@ void dcd_int_disable(uint8_t rhport) {
   // CMSIS has a membar after disabling interrupts
 }
 
+#if 0
 // Define only on MCU with internal pull-up. BSP can define on MCU without internal PU.
 #if defined(USB_BCDR_DPPU)
 
@@ -367,6 +368,6 @@ void dcd_connect(uint8_t rhport) {
   SYSCFG->PMC |= SYSCFG_PMC_USB_PU;
 }
 #endif
-
+#endif
 
 #endif /* TUSB_FSDEV_STM32_H */
