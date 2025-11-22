@@ -423,7 +423,7 @@ void dcd_int_disable (uint8_t rhport) {
  * 
  * @param index NRIO-format address.
  * @param ep_addr TinyUSB-format address.
- * @param in_isr True if executed in IRQ handler.
+ * @param is_isr True if executed in IRQ handler.
  * @return bool Whether or not the event was processed.
  */
 TU_ATTR_FAST_FUNC
@@ -632,7 +632,7 @@ void dcd_set_address (uint8_t rhport, uint8_t dev_addr) {
   } else {
     nrio_d12_set_address(NRIO_D12_ADDRESS_ENABLE | NRIO_D12_ADDRESS(dev_addr));
   }
-  dcd_edpt_xfer(rhport, tu_edpt_addr(0, TUSB_DIR_IN), NULL, 0);
+  dcd_edpt_xfer(rhport, tu_edpt_addr(0, TUSB_DIR_IN), NULL, 0, false);
 }
 
 // Wake up host
@@ -781,11 +781,9 @@ void dcd_edpt_close_all (uint8_t rhport) {
 }
 
 // Submit a transfer, When complete dcd_event_xfer_complete() is invoked to notify the stack
-bool dcd_edpt_xfer (uint8_t rhport, uint8_t ep_addr, uint8_t * buffer, uint16_t total_bytes) {
+bool dcd_edpt_xfer (uint8_t rhport, uint8_t ep_addr, uint8_t * buffer, uint16_t total_bytes, bool is_isr) {
   (void) rhport;
-  (void) ep_addr;
-  (void) buffer;
-  (void) total_bytes;
+  (void) is_isr;
 
   uint32_t index = tu_edpt_nrio_idx(ep_addr);
 
